@@ -49,7 +49,9 @@ const SOURCE_COMMIT_DESTROY_MISMATCH_ERROR =
 
 let nextStoreKey = 1;
 const generateStoreKey = function () {
-    return 'k' + nextStoreKey++;
+    const current = 'k' + nextStoreKey;
+    nextStoreKey += 1;
+    return current;
 };
 
 // ---
@@ -673,6 +675,26 @@ const Store = Class({
         return this.set('hasChanges', false);
     },
 
+    hasChangesForType(Type) {
+        const { _created, _destroyed, _skToChanged, _skToType } = this;
+        for (const storeKey in _created) {
+            if (Type === _skToType[storeKey]) {
+                return true;
+            }
+        }
+        for (const storeKey in _skToChanged) {
+            if (Type === _skToType[storeKey]) {
+                return true;
+            }
+        }
+        for (const storeKey in _destroyed) {
+            if (Type === _skToType[storeKey]) {
+                return true;
+            }
+        }
+        return false;
+    },
+
     /**
         Method: O.Store#commitChanges
 
@@ -786,15 +808,25 @@ const Store = Class({
         for (const storeKey in _skToChanged) {
             const status = _skToStatus[storeKey];
             const Type = _skToType[storeKey];
-            const changed = _skToChanged[storeKey];
+            const changed = filterObject(
+                _skToChanged[storeKey],
+                Record.getClientSettableAttributes(Type),
+            );
+
             let previous = _skToCommitted[storeKey];
+            delete _skToCommitted[storeKey];
+            // If all updates for a record are to noSync attributes, don't
+            // commit update to source
+            if (!Object.keys(changed).length) {
+                this.setStatus(storeKey, status & ~DIRTY);
+                continue;
+            }
             let data = _skToData[storeKey];
             const accountId = data.accountId;
             const update = getEntry(Type, accountId).update;
 
             _skToRollback[storeKey] = previous;
             previous = convertForeignKeysToId(this, Type, previous);
-            delete _skToCommitted[storeKey];
             data = convertForeignKeysToId(this, Type, data);
 
             update.storeKeys.push(storeKey);
@@ -1515,14 +1547,28 @@ const Store = Class({
         if (!Type) {
             return this;
         }
-        const id = this._typeToSKToId[guid(Type)][storeKey];
+        const typeId = guid(Type);
+        const id = this._typeToSKToId[typeId][storeKey];
+        if (!id) {
+            return this;
+        }
         const accountId = this.getAccountIdFromStoreKey(storeKey);
 
+        let callback;
+        if (id === 'singleton') {
+            const typeToStatus = this._accounts[accountId].status;
+            typeToStatus[typeId] |= LOADING;
+            callback = () => {
+                typeToStatus[typeId] &= ~LOADING;
+                this.checkServerState(accountId, Type);
+            };
+        }
+
         if (status & EMPTY) {
-            this.source.fetchRecord(accountId, Type, id);
+            this.source.fetchRecord(accountId, Type, id, callback);
             this.setStatus(storeKey, EMPTY | LOADING);
         } else {
-            this.source.refreshRecord(accountId, Type, id);
+            this.source.refreshRecord(accountId, Type, id, callback);
             this.setStatus(storeKey, status | LOADING);
         }
         return this;
@@ -1578,8 +1624,9 @@ const Store = Class({
             storeKey      - {String} The store key for the record.
             data          - {Object} An object of new attribute values for the
                             record.
-            changeIsDirty - {Boolean} Should the change be committed back to the
-                            server?
+            changeIsDirty - {Boolean} Should any of the change be committed back
+                            to the server? noSync attributes are filtered out of
+                            commits to the server in the commitChanges method.
 
         Returns:
             {Boolean} Was the data actually written? Will be false if the
@@ -1733,9 +1780,8 @@ const Store = Class({
             let errorForAttribute;
             const attrs = meta(record).attrs;
             record.beginPropertyChanges();
-            let l = changedKeys.length;
-            while (l--) {
-                const attrKey = changedKeys[l];
+            for (let i = changedKeys.length - 1; i >= 0; i -= 1) {
+                const attrKey = changedKeys[i];
                 let propKey = attrs[attrKey];
                 // Server may return more data than is defined in the record;
                 // ignore the rest.
@@ -1987,28 +2033,26 @@ const Store = Class({
         const account = this.getAccount(accountId, Type);
         const typeId = guid(Type);
         const clientState = account.clientState[typeId];
+        const oldState = account.serverState[typeId];
 
-        if (account.serverState[typeId] === newState) {
-            // Do nothing, we're already in this state.
-        } else if (
-            clientState &&
-            newState !== clientState &&
-            !account.ignoreServerState &&
-            !(account.status[typeId] & (LOADING | COMMITTING))
-        ) {
-            // Set this to clientState to avoid potential infinite loop. We
-            // don't know for sure if our serverState is older or newer due to
-            // concurrency. As we're now requesting updates, we can reset it to
-            // be clientState and then it will be updated to the real new server
-            // automatically if has changed in the sourceDidFetchUpdates
-            // handler. If a push comes in while fetching the updates, this
-            // won't match and we'll fetch again.
-            account.serverState[typeId] = clientState;
-            this.fire(typeId + ':server:' + accountId);
-            this.fetchAll(accountId, Type, true);
-        } else {
-            account.serverState[typeId] = newState;
-            if (!clientState) {
+        if (oldState !== newState) {
+            // if !oldState => we're checking if a pushed state still needs
+            // fetching. Due to concurrency, if this doesn't match newState,
+            // we don't know if it's older or newer. As we're now requesting
+            // updates, we can reset it to be clientState and then it will be
+            // updated to the real new server automatically if has changed in
+            // the sourceDidFetchUpdates handler. If a push comes in while
+            // fetching the updates, this won't match and we'll fetch again.
+            account.serverState[typeId] =
+                oldState || !clientState ? newState : clientState;
+            if (
+                newState !== clientState &&
+                !account.ignoreServerState &&
+                !(account.status[typeId] & (LOADING | COMMITTING))
+            ) {
+                if (clientState) {
+                    this.fetchAll(accountId, Type, true);
+                }
                 // We have a query but not matches yet; we still need to
                 // refresh the queries in case there are now matches.
                 this.fire(typeId + ':server:' + accountId);
@@ -2051,10 +2095,9 @@ const Store = Class({
         const seen = {};
         const updates = {};
         const foreignRefAttrs = getForeignRefAttrs(Type);
-        let l = records.length;
 
-        while (l--) {
-            const data = records[l];
+        for (let i = records.length - 1; i >= 0; i -= 1) {
+            const data = records[i];
             const id = data[idAttrKey];
             const storeKey = this.getStoreKey(accountId, Type, id);
             const status = this.getStatus(storeKey);
@@ -2119,7 +2162,14 @@ const Store = Class({
                 this.sourceStateDidChange(accountId, Type, state);
             } else {
                 account.clientState[typeId] = state;
-                if (!oldClientState || !oldServerState) {
+                if (
+                    !oldClientState ||
+                    !oldServerState ||
+                    // If oldClientState == oldServerState, then the state we've
+                    // just received MUST be newer so we can update the server
+                    // state too
+                    oldClientState === oldServerState
+                ) {
                     account.serverState[typeId] = state;
                 }
             }
@@ -2196,6 +2246,14 @@ const Store = Class({
                 );
             }
 
+            const newId = update[idAttrKey];
+            if (newId && newId !== id) {
+                // Don't delete the old idToSk mapping, as references to the
+                // old id may still appear in queryChanges responses
+                _skToId[storeKey] = newId;
+                _idToSk[newId] = storeKey;
+            }
+
             if (status & DIRTY) {
                 // If we have a conflict we can either rebase on top, or discard
                 // our local changes.
@@ -2232,14 +2290,6 @@ const Store = Class({
                 delete _skToCommitted[storeKey];
             }
 
-            const newId = update[idAttrKey];
-            if (newId && newId !== id) {
-                // Don't delete the old idToSk mapping, as references to the
-                // old id may still appear in queryChanges responses
-                _skToId[storeKey] = newId;
-                _idToSk[newId] = storeKey;
-            }
-
             this.updateData(storeKey, update, false);
             this.setStatus(storeKey, READY);
         }
@@ -2263,11 +2313,10 @@ const Store = Class({
             {O.Store} Returns self.
     */
     sourceCouldNotFindRecords(accountId, Type, ids) {
-        let l = ids.length;
         const { _skToCommitted, _skToChanged } = this;
 
-        while (l--) {
-            const storeKey = this.getStoreKey(accountId, Type, ids[l]);
+        for (let i = ids.length - 1; i >= 0; i -= 1) {
+            const storeKey = this.getStoreKey(accountId, Type, ids[i]);
             const status = this.getStatus(storeKey);
             if (status & (EMPTY | NON_EXISTENT)) {
                 this.setStatus(storeKey, NON_EXISTENT);
@@ -2358,9 +2407,8 @@ const Store = Class({
             {O.Store} Returns self.
     */
     sourceDidModifyRecords(accountId, Type, ids) {
-        let l = ids.length;
-        while (l--) {
-            const storeKey = this.getStoreKey(accountId, Type, ids[l]);
+        for (let i = ids.length - 1; i >= 0; i -= 1) {
+            const storeKey = this.getStoreKey(accountId, Type, ids[i]);
             const status = this.getStatus(storeKey);
             if (status & READY) {
                 this.setStatus(storeKey, status | OBSOLETE);
@@ -2386,9 +2434,8 @@ const Store = Class({
             {O.Store} Returns self.
     */
     sourceDidDestroyRecords(accountId, Type, ids) {
-        let l = ids.length;
-        while (l--) {
-            const id = ids[l];
+        for (let i = ids.length - 1; i >= 0; i -= 1) {
+            const id = ids[i];
             const storeKey = this.getStoreKey(accountId, Type, id);
             // If we have an immutable record, an "update" may have actually
             // been a destroy and create. We may have updated the old record,
@@ -2538,11 +2585,10 @@ const Store = Class({
             {O.Store} Returns self.
     */
     sourceDidNotCreate(storeKeys, isPermanent, errors) {
-        let l = storeKeys.length;
         const { _skToCommitted, _skToChanged, _created } = this;
 
-        while (l--) {
-            const storeKey = storeKeys[l];
+        for (let i = storeKeys.length - 1; i >= 0; i -= 1) {
+            const storeKey = storeKeys[i];
             const status = this.getStatus(storeKey);
             if (status & DESTROYED) {
                 this.setStatus(storeKey, DESTROYED);
@@ -2556,7 +2602,7 @@ const Store = Class({
                 _created[storeKey] = '';
                 if (
                     isPermanent &&
-                    (!errors || !this._notifyRecordOfError(storeKey, errors[l]))
+                    (!errors || !this._notifyRecordOfError(storeKey, errors[i]))
                 ) {
                     this.destroyRecord(storeKey);
                 }
@@ -2583,11 +2629,10 @@ const Store = Class({
             {O.Store} Returns self.
     */
     sourceDidCommitUpdate(storeKeys) {
-        let l = storeKeys.length;
         const { _skToRollback } = this;
 
-        while (l--) {
-            const storeKey = storeKeys[l];
+        for (let i = storeKeys.length - 1; i >= 0; i -= 1) {
+            const storeKey = storeKeys[i];
             const status = this.getStatus(storeKey);
             delete _skToRollback[storeKey];
             if (status !== EMPTY) {
@@ -2635,7 +2680,6 @@ const Store = Class({
             {O.Store} Returns self.
     */
     sourceDidNotUpdate(storeKeys, isPermanent, errors) {
-        let l = storeKeys.length;
         const {
             _skToData,
             _skToChanged,
@@ -2644,8 +2688,8 @@ const Store = Class({
             _skToType,
         } = this;
 
-        while (l--) {
-            const storeKey = storeKeys[l];
+        for (let i = storeKeys.length - 1; i >= 0; i -= 1) {
+            const storeKey = storeKeys[i];
             const status = this.getStatus(storeKey);
             // If destroyed now, but still in memory, revert the data so
             // that if the destroy fails we still have the right data.
@@ -2675,7 +2719,7 @@ const Store = Class({
             }
             if (
                 isPermanent &&
-                (!errors || !this._notifyRecordOfError(storeKey, errors[l]))
+                (!errors || !this._notifyRecordOfError(storeKey, errors[i]))
             ) {
                 this.revertData(storeKey);
             }
@@ -2701,9 +2745,8 @@ const Store = Class({
             {O.Store} Returns self.
     */
     sourceDidCommitDestroy(storeKeys) {
-        let l = storeKeys.length;
-        while (l--) {
-            const storeKey = storeKeys[l];
+        for (let i = storeKeys.length - 1; i >= 0; i -= 1) {
+            const storeKey = storeKeys[i];
             const status = this.getStatus(storeKey);
 
             // If the record has been undestroyed while being committed
@@ -2767,11 +2810,10 @@ const Store = Class({
             {O.Store} Returns self.
     */
     sourceDidNotDestroy(storeKeys, isPermanent, errors) {
-        let l = storeKeys.length;
         const { _created, _destroyed } = this;
 
-        while (l--) {
-            const storeKey = storeKeys[l];
+        for (let i = storeKeys.length - 1; i >= 0; i -= 1) {
+            const storeKey = storeKeys[i];
             const status = this.getStatus(storeKey);
             if ((status & ~DIRTY) === (READY | NEW | COMMITTING)) {
                 this.setStatus(storeKey, status & ~(COMMITTING | NEW));
@@ -2781,7 +2823,7 @@ const Store = Class({
                 _destroyed[storeKey] = '';
                 if (
                     isPermanent &&
-                    (!errors || !this._notifyRecordOfError(storeKey, errors[l]))
+                    (!errors || !this._notifyRecordOfError(storeKey, errors[i]))
                 ) {
                     this.undestroyRecord(storeKey);
                 }

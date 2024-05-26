@@ -1,21 +1,27 @@
 /*global window, document, FileReader, Squire */
 
 import { formatKeyForPlatform } from '../../application/formatKeyForPlatform.js';
-import { Class } from '../../core/Core.js';
+import { Class, meta } from '../../core/Core.js';
 import { email as emailRegExp } from '../../core/RegExp.js';
 import { isClickModified, lookupKey } from '../../dom/DOMEvent.js';
-import { create as el, nearest } from '../../dom/Element.js';
+import { create as el, getStyle, nearest } from '../../dom/Element.js';
 import { COPY } from '../../drag/DragEffect.js';
 import { DropTarget } from '../../drag/DropTarget.js';
 import { bind, bindTwoWay } from '../../foundation/Binding.js';
-import { didError } from '../../foundation/RunLoop.js';
-import { isEqualToValue } from '../../foundation/Transform.js';
+import { invokeInNextEventLoop } from '../../foundation/RunLoop.js';
+import {
+    invert,
+    isEqualToValue,
+    toBoolean,
+} from '../../foundation/Transform.js';
 import { loc } from '../../localisation/i18n.js';
 import { isAndroid, isApple, isIOS } from '../../ua/UA.js';
+import { when } from '../collections/SwitchView.js';
 import { ToolbarView } from '../collections/ToolbarView.js';
 import { ScrollView } from '../containers/ScrollView.js';
 import { MenuView } from '../menu/MenuView.js';
 import { PopOverView } from '../panels/PopOverView.js';
+import { RootView } from '../RootView.js';
 import { View } from '../View.js';
 import { ViewEventsController } from '../ViewEventsController.js';
 import { ButtonView } from './ButtonView.js';
@@ -27,10 +33,7 @@ import '../../foundation/Decorators.js';
 
 const execCommand = function (command) {
     return function (arg) {
-        const editor = this.get('editor');
-        if (editor) {
-            editor[command](arg);
-        }
+        this.get('editor')?.[command](arg);
         return this;
     };
 };
@@ -50,10 +53,9 @@ const queryCommandState = function (tag) {
 const urlRegExp =
     /^(?:https?:\/\/)?[\w.]+[.][a-z]{2,4}(?:\/[^\s()<>]+|\([^\s()<>]+\))*/i;
 
-const popOver = new PopOverView();
-
 const TOOLBAR_HIDDEN = 0;
 const TOOLBAR_AT_TOP = 1;
+const TOOLBAR_ABOVE_KEYBOARD = 2;
 
 const URLPickerView = Class({
     Name: 'URLPickerView',
@@ -71,6 +73,12 @@ const URLPickerView = Class({
     draw(/* layer */) {
         return [
             (this._input = new TextInputView({
+                inputAttributes: {
+                    autocapitalize: 'off',
+                    autocomplete: 'off',
+                    autocorrect: 'off',
+                    spellcheck: 'false',
+                },
                 label: this.get('prompt'),
                 value: bindTwoWay(this, 'value'),
                 placeholder: this.get('placeholder'),
@@ -85,7 +93,7 @@ const URLPickerView = Class({
                 new ButtonView({
                     type: 'v-Button--standard v-Button--sizeM',
                     label: loc('Cancel'),
-                    target: popOver,
+                    target: this.get('popOver'),
                     method: 'hide',
                 }),
             ]),
@@ -126,6 +134,19 @@ const RichTextView = Class({
     tabIndex: undefined,
     label: undefined,
 
+    isToolbarShown: false,
+
+    checkToolbarShown() {
+        this.set(
+            'isToolbarShown',
+            this.get('isFocused') || this.get('popOver').get('isVisible'),
+        );
+    },
+
+    popOver: function () {
+        return new PopOverView();
+    }.property(),
+
     // ---
 
     savedSelection: null,
@@ -137,7 +158,7 @@ const RichTextView = Class({
 
     // ---
 
-    showToolbar: isIOS || isAndroid ? TOOLBAR_HIDDEN : TOOLBAR_AT_TOP,
+    showToolbar: isIOS || isAndroid ? TOOLBAR_ABOVE_KEYBOARD : TOOLBAR_AT_TOP,
     fontFaceOptions: function () {
         return [
             [loc('Default'), null],
@@ -164,8 +185,8 @@ const RichTextView = Class({
     editor: null,
     editorId: undefined,
     editorClassName: '',
+    editorConfig: null,
     styles: null,
-    blockDefaults: null,
 
     _value: '',
     value: function (html) {
@@ -193,6 +214,10 @@ const RichTextView = Class({
         if (editor) {
             editor.destroy();
         }
+        const popOver = meta(this).cache.popOver;
+        if (popOver) {
+            popOver.hide().destroy();
+        }
         RichTextView.parent.destroy.call(this);
     },
 
@@ -211,16 +236,10 @@ const RichTextView = Class({
         const selection = this.get('savedSelection');
         const editor = this.get('editor');
         if (selection) {
-            editor
-                .setSelection(
-                    editor.createRange(
-                        selection.sc,
-                        selection.so,
-                        selection.ec,
-                        selection.eo,
-                    ),
-                )
-                .focus();
+            const range = document.createRange();
+            range.setStart(selection.sc, selection.so);
+            range.setEnd(selection.ec, selection.eo);
+            editor.setSelection(range).focus();
             this.set('savedSelection', null);
         } else {
             editor.moveCursorToStart();
@@ -287,7 +306,7 @@ const RichTextView = Class({
         document.createDocumentFragment().appendChild(editingLayer);
         const editor = this.createEditor(
             editingLayer,
-            this.get('blockDefaults'),
+            this.get('editorConfig'),
         );
         editor
             .setHTML(this._value)
@@ -296,19 +315,26 @@ const RichTextView = Class({
             .addEventListener('cursor', this)
             .addEventListener('pathChange', this)
             .addEventListener('undoStateChange', this)
-            .addEventListener('dragover', this)
-            .addEventListener('drop', this).didError = didError;
+            .addEventListener('pasteImage', this);
         this.set('editor', editor).set('path', editor.getPath());
 
         if (this.get('isDisabled')) {
             this.redrawIsDisabled();
         }
 
+        const showToolbar = this.get('showToolbar');
+        let toolbarView = null;
+        if (showToolbar === TOOLBAR_AT_TOP) {
+            toolbarView = this.get('toolbarView');
+        } else if (showToolbar === TOOLBAR_ABOVE_KEYBOARD) {
+            toolbarView = when(this, 'isToolbarShown')
+                .show([this.get('toolbarView')])
+                .end();
+        }
+
         return [
             el('style', { type: 'text/css' }, [this.get('styles')]),
-            this.get('showToolbar') !== TOOLBAR_HIDDEN
-                ? this.get('toolbarView')
-                : null,
+            toolbarView,
         ];
     },
 
@@ -330,7 +356,7 @@ const RichTextView = Class({
     // ---
 
     scrollIntoView: function () {
-        if (!this.get('isFocused')) {
+        if (!this.get('isFocused') || !this.get('isInDocument')) {
             return;
         }
 
@@ -350,22 +376,38 @@ const RichTextView = Class({
             .getBoundingClientRect().top;
         const offsetTop = cursorPosition.top - scrollViewOffsetTop;
         const offsetBottom = cursorPosition.bottom - scrollViewOffsetTop;
-        let scrollViewHeight = scrollView.get('pxHeight');
-        const toolbarHeight =
-            this.get('showToolbar') === TOOLBAR_AT_TOP
-                ? this.getFromPath('toolbarView.pxHeight')
+        const scrollViewHeight =
+            scrollView.get('pxHeight') -
+            scrollView.getParent(RootView).get('safeAreaInsetBottom');
+        const showToolbar = this.get('showToolbar');
+        const toolbarView =
+            showToolbar !== TOOLBAR_HIDDEN ? this.get('toolbarView') : null;
+        const toolbarHeight = toolbarView?.get('pxHeight') || 0;
+        const topToolbarHeight =
+            showToolbar === TOOLBAR_AT_TOP ? toolbarHeight : 0;
+        const bottomToolbarHeight =
+            showToolbar === TOOLBAR_ABOVE_KEYBOARD
+                ? toolbarHeight +
+                  (toolbarView.get('isInDocument')
+                      ? parseInt(
+                            getStyle(toolbarView.get('layer'), 'margin-bottom'),
+                            10,
+                        ) || 0
+                      : 0)
                 : 0;
         let scrollBy = 0;
-        const minimumGapToScrollEdge = 15;
-        if (isIOS) {
-            scrollViewHeight -=
-                // Keyboard height (in WKWebView, but not Safari)
-                document.body.offsetHeight - window.innerHeight;
-        }
-        if (offsetTop < toolbarHeight + minimumGapToScrollEdge) {
-            scrollBy = offsetTop - toolbarHeight - minimumGapToScrollEdge;
-        } else if (offsetBottom > scrollViewHeight - minimumGapToScrollEdge) {
-            scrollBy = offsetBottom + minimumGapToScrollEdge - scrollViewHeight;
+        const minimumGapToScrollEdge = 16;
+        if (offsetTop < topToolbarHeight + minimumGapToScrollEdge) {
+            scrollBy = offsetTop - topToolbarHeight - minimumGapToScrollEdge;
+        } else if (
+            offsetBottom >
+            scrollViewHeight - bottomToolbarHeight - minimumGapToScrollEdge
+        ) {
+            scrollBy =
+                offsetBottom +
+                bottomToolbarHeight +
+                minimumGapToScrollEdge -
+                scrollViewHeight;
         }
         if (scrollBy) {
             scrollView.scrollBy(0, Math.round(scrollBy), true);
@@ -418,13 +460,27 @@ const RichTextView = Class({
 
     toolbarView: function () {
         const richTextView = this;
+        const rootView = this.getParent(RootView);
         const showToolbar = this.get('showToolbar');
 
         return new ToolbarView({
             className: 'v-Toolbar v-Toolbar--preventOverlap v-RichText-toolbar',
             overflowMenuType: '',
-            positioning: 'sticky',
+            positioning:
+                showToolbar === TOOLBAR_ABOVE_KEYBOARD ? 'fixed' : 'sticky',
             preventOverlap: showToolbar === TOOLBAR_AT_TOP,
+            ...(showToolbar === TOOLBAR_ABOVE_KEYBOARD
+                ? {
+                      layout: bind(
+                          rootView,
+                          'safeAreaInsetBottom',
+                          (bottom) => ({ bottom }),
+                      ),
+                      mousedown: function (event) {
+                          event.preventDefault();
+                      }.on('mousedown'),
+                  }
+                : {}),
         })
             .registerViews({
                 bold: new ButtonView({
@@ -670,8 +726,10 @@ const RichTextView = Class({
                     label: loc('Quote'),
                     tooltip:
                         loc('Quote') + '\n' + formatKeyForPlatform('Cmd-]'),
-                    target: richTextView,
-                    method: 'increaseQuoteLevel',
+                    activate() {
+                        richTextView.increaseQuoteLevel();
+                        this.fire('button:activate');
+                    },
                 }),
                 unquote: new ButtonView({
                     tabIndex: -1,
@@ -680,8 +738,10 @@ const RichTextView = Class({
                     label: loc('Unquote'),
                     tooltip:
                         loc('Unquote') + '\n' + formatKeyForPlatform('Cmd-['),
-                    target: richTextView,
-                    method: 'decreaseQuoteLevel',
+                    activate() {
+                        richTextView.decreaseQuoteLevel();
+                        this.fire('button:activate');
+                    },
                 }),
                 ul: new ButtonView({
                     tabIndex: -1,
@@ -721,6 +781,26 @@ const RichTextView = Class({
                         this.fire('button:activate');
                     },
                 }),
+                undo: new ButtonView({
+                    tabIndex: -1,
+                    isDisabled: bind(this, 'canUndo', invert),
+                    type: 'v-Button--iconOnly',
+                    icon: this.getIcon('undo'),
+                    label: loc('Undo'),
+                    tooltip: loc('Undo'),
+                    target: this,
+                    method: 'undo',
+                }),
+                redo: new ButtonView({
+                    tabIndex: -1,
+                    isDisabled: bind(this, 'canRedo', invert),
+                    type: 'v-Button--iconOnly',
+                    icon: this.getIcon('redo'),
+                    label: loc('Redo'),
+                    tooltip: loc('Redo'),
+                    target: this,
+                    method: 'redo',
+                }),
                 unformat: new ButtonView({
                     tabIndex: -1,
                     type: 'v-Button--iconOnly',
@@ -759,17 +839,7 @@ const RichTextView = Class({
     }.property(),
 
     showFontSizeMenu(buttonView) {
-        // If we're in the overflow menu, align with the "More" button.
-        if (buttonView.getParent(MenuView)) {
-            buttonView = this.get('toolbarView').getView('overflow');
-        }
-        popOver.show({
-            view: this.get('fontSizeMenuView'),
-            alignWithView: buttonView,
-            alignEdge: 'centre',
-            showCallout: true,
-            offsetTop: 2,
-        });
+        this.showOverlay(this.get('fontSizeMenuView'), buttonView);
     },
 
     fontFaceMenuView: function () {
@@ -795,17 +865,7 @@ const RichTextView = Class({
     }.property(),
 
     showFontFaceMenu(buttonView) {
-        // If we're in the overflow menu, align with the "More" button.
-        if (buttonView.getParent(MenuView)) {
-            buttonView = this.get('toolbarView').getView('overflow');
-        }
-        popOver.show({
-            view: this.get('fontFaceMenuView'),
-            alignWithView: buttonView,
-            alignEdge: 'centre',
-            showCallout: true,
-            offsetTop: 2,
-        });
+        this.showOverlay(this.get('fontFaceMenuView'), buttonView);
     },
 
     _colorText: true,
@@ -878,32 +938,12 @@ const RichTextView = Class({
 
     showTextColorMenu(buttonView) {
         this._colorText = true;
-        // If we're in the overflow menu, align with the "More" button.
-        if (buttonView.getParent(MenuView)) {
-            buttonView = this.get('toolbarView').getView('overflow');
-        }
-        popOver.show({
-            view: this.get('textColorMenuView'),
-            alignWithView: buttonView,
-            alignEdge: 'centre',
-            showCallout: true,
-            offsetTop: 2,
-        });
+        this.showOverlay(this.get('textColorMenuView'), buttonView);
     },
 
     showTextHighlightColorMenu(buttonView) {
         this._colorText = false;
-        // If we're in the overflow menu, align with the "More" button.
-        if (buttonView.getParent(MenuView)) {
-            buttonView = this.get('toolbarView').getView('overflow');
-        }
-        popOver.show({
-            view: this.get('textColorMenuView'),
-            alignWithView: buttonView,
-            alignEdge: 'centre',
-            showCallout: true,
-            offsetTop: 2,
-        });
+        this.showOverlay(this.get('textColorMenuView'), buttonView);
     },
 
     linkOverlayView: function () {
@@ -912,6 +952,7 @@ const RichTextView = Class({
             prompt: loc('Add a link to the following URL or email:'),
             placeholder: 'e.g. www.example.com',
             confirm: loc('Add link'),
+            popOver: richTextView.get('popOver'),
             add() {
                 let url = this.get('value').trim();
                 let email;
@@ -935,7 +976,7 @@ const RichTextView = Class({
                     }
                 }
                 richTextView.makeLink(url);
-                popOver.hide();
+                this.get('popOver').hide();
             },
         });
     }.property(),
@@ -956,6 +997,7 @@ const RichTextView = Class({
             prompt: loc('Insert an image from the following URL:'),
             placeholder: 'e.g. https://example.com/path/to/image.jpg',
             confirm: loc('Insert image'),
+            popOver: richTextView.get('popOver'),
             add() {
                 let url = this.get('value').trim();
                 if (!/^(?:https?|data):/i.test(url)) {
@@ -967,7 +1009,7 @@ const RichTextView = Class({
                     url = 'http://' + url;
                 }
                 richTextView.insertImage(url);
-                popOver.hide();
+                this.get('popOver').hide();
             },
         });
     }.property(),
@@ -979,19 +1021,31 @@ const RichTextView = Class({
     },
 
     showOverlay(view, buttonView) {
+        const aboveKeyboard =
+            this.get('showToolbar') === TOOLBAR_ABOVE_KEYBOARD;
+
         // If we're in the overflow menu, align with the "More" button.
         if (buttonView.getParent(MenuView)) {
             buttonView = this.get('toolbarView').getView('overflow');
         }
         const richTextView = this;
-        popOver.show({
+        this.get('popOver').show({
             view,
+            positionToThe: aboveKeyboard ? 'top' : 'bottom',
             alignWithView: buttonView,
+            alignEdge:
+                !aboveKeyboard && view instanceof URLPickerView
+                    ? 'left'
+                    : 'centre',
             showCallout: true,
-            offsetTop: 2,
-            offsetLeft: -4,
+            offsetTop: aboveKeyboard ? 0 : 2,
+            offsetLeft: aboveKeyboard ? 0 : -4,
             onHide() {
                 richTextView.focus();
+                invokeInNextEventLoop(
+                    richTextView.checkToolbarShown,
+                    richTextView,
+                );
             },
         });
     },
@@ -999,23 +1053,23 @@ const RichTextView = Class({
     // --- Commands ---
 
     focus() {
-        const editor = this.get('editor');
-        if (editor) {
-            editor.focus();
-        }
+        this.get('editor')?.focus();
         return this;
     },
 
     blur() {
-        const editor = this.get('editor');
-        if (editor) {
-            editor.blur();
-        }
+        this.get('editor')?.blur();
         return this;
     },
 
-    undo: execCommand('undo'),
-    redo: execCommand('redo'),
+    undo() {
+        this.get('editor')?.undo().focus();
+        return this;
+    },
+    redo() {
+        this.get('editor')?.redo().focus();
+        return this;
+    },
 
     bold: execCommand('bold'),
     italic: execCommand('italic'),
@@ -1033,8 +1087,8 @@ const RichTextView = Class({
     setFontFace: execCommand('setFontFace'),
     setFontSize: execCommand('setFontSize'),
 
-    setTextColor: execCommand('setTextColour'),
-    setHighlightColor: execCommand('setHighlightColour'),
+    setTextColor: execCommand('setTextColor'),
+    setHighlightColor: execCommand('setHighlightColor'),
 
     setTextAlignment: execCommand('setTextAlignment'),
     setTextDirection: execCommand('setTextDirection'),
@@ -1116,14 +1170,17 @@ const RichTextView = Class({
     canRedo: false,
 
     setUndoState: function (event) {
-        this.set('canUndo', event.canUndo).set('canRedo', event.canRedo);
+        this.set('canUndo', event.detail.canUndo).set(
+            'canRedo',
+            event.detail.canRedo,
+        );
         event.stopPropagation();
     }.on('undoStateChange'),
 
     path: '',
 
     setPath: function (event) {
-        this.set('path', event.path);
+        this.set('path', event.detail.path);
         event.stopPropagation();
     }.on('pathChange'),
 
@@ -1193,22 +1250,17 @@ const RichTextView = Class({
     // --- Keep state in sync with render ---
 
     handleEvent(event) {
-        // Ignore real dragover/drop events from Squire. They wil be handled
-        // by the standard event delegation system. We only observe these
-        // to get the image paste fake dragover/drop events.
-        const type = event.type;
-        if ((type === 'dragover' || type === 'drop') && event.stopPropagation) {
-            return;
-        }
         ViewEventsController.handleEvent(event, this);
     },
 
     _onFocus: function () {
         this.set('isFocused', true);
+        this.set('isToolbarShown', true);
     }.on('focus'),
 
     _onBlur: function () {
         this.set('isFocused', false);
+        invokeInNextEventLoop(this.checkToolbarShown, this);
     }.on('blur'),
 
     blurOnEsc: function (event) {
@@ -1233,6 +1285,19 @@ const RichTextView = Class({
         }
     }.on('click'),
 
+    // --- Page image ---
+
+    pasteImage: function (event) {
+        const dropAcceptedDataTypes = this.get('dropAcceptedDataTypes');
+        const images = Array.from(event.detail.clipboardData.items)
+            .filter((item) => dropAcceptedDataTypes[item.type])
+            .map((item) => item.getAsFile())
+            .filter(toBoolean);
+        if (images.length) {
+            this.insertImagesFromFiles(images);
+        }
+    }.on('pasteImage'),
+
     // -- Drag and drop ---
 
     dropAcceptedDataTypes: {
@@ -1255,4 +1320,4 @@ const RichTextView = Class({
     },
 });
 
-export { RichTextView, TOOLBAR_HIDDEN, TOOLBAR_AT_TOP };
+export { RichTextView, TOOLBAR_HIDDEN, TOOLBAR_AT_TOP, TOOLBAR_ABOVE_KEYBOARD };

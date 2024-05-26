@@ -23,7 +23,7 @@ const AbstractInputView = Class({
     /**
         Property: O.AbstractInputView#label
         Type: String|Element|null
-        Default: ''
+        Default: null
 
         A label for the control, to be displayed next to it.
     */
@@ -32,7 +32,7 @@ const AbstractInputView = Class({
     /**
         Property: O.AbstractInputView#label
         Type: String|Element|null
-        Default: ''
+        Default: null
 
         A description for the control, to be displayed next to it.
     */
@@ -97,7 +97,12 @@ const AbstractInputView = Class({
         - pattern: String (regexp)
     */
     inputAttributes: {
-        autocomplete: 'off',
+        // The real value to turn off autocomplete is "off". However, browsers
+        // mostly ignore that these days, as they think they know better,
+        // *sigh*. So instead we set this to "ignore" - as this is not a value
+        // they understand, the browser doesn't know what autocomplete options
+        // to give so in effect this turns off autocomplete!
+        autocomplete: 'ignore',
     },
 
     /**
@@ -121,21 +126,40 @@ const AbstractInputView = Class({
     /**
         Method: O.AbstractInputView#drawControl
 
-        Overridden to set properties and add label. See <O.View#draw>.
+        Overridden by subclasses to create a DOM input control. Must set
+        this._domControl for O.AbstractInputView#drawLabel.
     */
     drawControl() {
-        throw new Error('drawControl() must be overriden in subclass');
+        throw new Error('drawControl() must be overridden in subclass');
     },
 
+    /**
+        Method: O.AbstractInputView#drawLabel
+
+        Creates a label element for the DOM input control returned by
+        O.AbstractInputView#drawControl.
+    */
     drawLabel(label) {
         const control = this._domControl;
         return el('label', { for: control && control.id }, [label]);
     },
 
+    /**
+        Method: O.AbstractInputView#drawDescription
+
+        Creates a label element for the DOM input control returned by
+        O.AbstractInputView#drawControl.
+    */
     drawDescription(description) {
         return el('p', [description]);
     },
 
+    /**
+        Method: O.AbstractInputView#drawHelp
+
+        Indirection for O.AbstractInputView#drawDescription to allow
+        conditionally drawing descriptions e.g. for input validity.
+    */
     drawHelp() {
         const description = this.get('description');
         return description ? this.drawDescription(description) : null;
@@ -190,69 +214,6 @@ const AbstractInputView = Class({
     redrawValue() {
         this._domControl.value = this.get('value');
     },
-
-    // --- Focus ---
-
-    /**
-        Method: O.AbstractInputView#focus
-
-        Focusses the control.
-
-        Returns:
-            {O.AbstractInputView} Returns self.
-    */
-    focus() {
-        if (this.get('isInDocument')) {
-            this._domControl.focus({
-                preventScroll: true,
-            });
-            // Fire event synchronously.
-            if (!this.get('isFocused')) {
-                this.fire('focus', {
-                    target: this._domControl,
-                    targetView: this,
-                });
-            }
-        }
-        return this;
-    },
-
-    /**
-        Method: O.AbstractInputView#blur
-
-        Removes focus from the control.
-
-        Returns:
-            {O.AbstractInputView} Returns self.
-    */
-    blur() {
-        if (this.get('isInDocument')) {
-            this._domControl.blur();
-            // Fire event synchronously.
-            if (this.get('isFocused')) {
-                this.fire('blur', {
-                    target: this._domControl,
-                    targetView: this,
-                });
-            }
-        }
-        return this;
-    },
-
-    /**
-        Method (private): O.AbstractInputView#_updateIsFocused
-
-        Updates the <#isFocused> property.
-
-        Parameters:
-            event - {Event} The focus event.
-    */
-    _updateIsFocused: function (event) {
-        this.set(
-            'isFocused',
-            event.type === 'focus' && event.target === this._domControl,
-        );
-    }.on('focus', 'blur'),
 
     // --- Input ---
 

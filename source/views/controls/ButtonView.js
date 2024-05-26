@@ -128,6 +128,13 @@ const ButtonView = Class({
     */
     layerTag: 'button',
 
+    /**
+        Property: O.ButtonView#baseClassName
+        Type: String
+        Default: 'v-Button'
+
+        Overrides default in <O.AbstractControlView#baseClassName>.
+    */
     baseClassName: 'v-Button',
 
     /**
@@ -167,6 +174,11 @@ const ButtonView = Class({
     */
     draw(layer) {
         this._domControl = layer;
+        // This stops the button acting as a submit button when inside a <form>;
+        // this fixes some weird behaviour where the browser can simulate a
+        // click on the button when the user hits enter on another field inside
+        // the form.
+        layer.type = 'button';
 
         let icon = this.get('icon');
         if (!icon) {
@@ -245,7 +257,7 @@ const ButtonView = Class({
 
         The name of the event to fire on the <#target> when the button is
         activated. Note, you should set *either* the action property or the
-        <#method> property. If both are set, the method property will be
+        <#method> property. If both are set, the action property will be
         ignored.
     */
     action: null,
@@ -257,7 +269,7 @@ const ButtonView = Class({
 
         The name of the method to call on the <#target> when the button is
         activated. Note, you should set *either* the <#action> property or the
-        method property. If both are set, the method property will be ignored.
+        method property. If both are set, the action property will be ignored.
     */
     method: null,
 
@@ -266,10 +278,10 @@ const ButtonView = Class({
 
         This method is called when the button is triggered, either by being
         clicked/tapped on, or via a keyboard shortcut. If the button is
-        disabled, it will do nothing. Otherwise, it fires an event with the name
-        given in the <#action> property on the <#target> object. Or, if no
-        action is defined, calls the method named in the <#method> property on
-        the object instead.
+        disabled, it will do nothing. Otherwise, it calls the method named in
+        the <#method> property on the object instead. Or, if no method is
+        defined, it fires an event with the name given in the <#action> property
+        on the <#target> object, if one is set.
 
         If an event is fired, the `originView` property of the event object
         provides a reference back to the button that fired it. If a method is

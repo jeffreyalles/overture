@@ -23,6 +23,8 @@ const processResponse = (request, response) => {
     return response;
 };
 
+const removeSearch = (url) => url.replace(/[?].*$/, '');
+
 class CacheManager {
     constructor(rules) {
         for (const key in rules) {
@@ -32,7 +34,7 @@ class CacheManager {
         this.db = new Database({
             name: 'CacheExpiration',
             version: 1,
-            setup(db /*, newVersion, oldVersion*/) {
+            setup(db /*, newVersion, oldVersion, transaction*/) {
                 for (const cacheName in rules) {
                     if (rules.noExpire) {
                         continue;
@@ -49,26 +51,33 @@ class CacheManager {
     async getIn(cacheName, request) {
         const rules = this.rules[cacheName];
         const cache = await caches.open(cacheName);
-        const cacheUrl = request.url
-            .replace(bearerParam, '')
-            .replace(downloadParam, '');
+        const cacheUrl =
+            rules && rules.ignoreSearch
+                ? removeSearch(request.url)
+                : request.url
+                      .replace(bearerParam, '')
+                      .replace(downloadParam, '');
         const response = await cache.match(cacheUrl);
         if (response) {
             if (rules) {
                 this.setIn(cacheName, cacheUrl, null, request);
             }
             return processResponse(request, response);
-        } else if (!rules) {
+        }
+        if (!rules) {
             return fetch(request);
         }
         return this.fetchAndCacheIn(cacheName, request);
     }
 
     async fetchAndCacheIn(cacheName, request) {
-        let url = request.url;
-        if (request.mode === 'no-cors' || downloadParam.test(url)) {
-            url = url.replace(downloadParam, '');
-            request = new Request(url, {
+        const ignoreSearch = this.rules[cacheName].ignoreSearch;
+        const requestUrl = request.url;
+        let fetchUrl = ignoreSearch
+            ? removeSearch(requestUrl)
+            : requestUrl.replace(downloadParam, '');
+        if (request.mode === 'no-cors' || fetchUrl !== requestUrl) {
+            request = new Request(fetchUrl, {
                 mode: 'cors',
                 referrer: 'no-referrer',
             });
@@ -76,8 +85,8 @@ class CacheManager {
         let response = await fetch(request);
         // Cache if valid
         if (response && response.status === 200) {
-            url = url.replace(bearerParam, '');
-            this.setIn(cacheName, url, response.clone(), null);
+            fetchUrl = fetchUrl.replace(bearerParam, '');
+            this.setIn(cacheName, fetchUrl, response.clone(), null);
             response = processResponse(request, response);
         }
         return response;
@@ -149,44 +158,55 @@ class CacheManager {
             ? Date.now() - 1000 * maxLastAccess
             : 0;
         const entriesToDelete = [];
-        await db.transaction(cacheName, 'readonly', async (transaction) => {
-            // Iterate starting from most recently used
-            const cursor = transaction
-                .objectStore(cacheName)
-                .index('byLastUsed')
-                .openCursor(null, 'prev');
-            let count = 0;
-            for await (const result of iterate(cursor)) {
-                const entry = result.value;
-                if (entry.lastAccess < minLastAccess || count >= maxNumber) {
-                    entriesToDelete.push(entry);
-                } else {
-                    count += 1;
+        try {
+            await db.transaction(cacheName, 'readonly', async (transaction) => {
+                // Iterate starting from most recently used
+                const cursor = transaction
+                    .objectStore(cacheName)
+                    .index('byLastUsed')
+                    .openCursor(null, 'prev');
+                let count = 0;
+                for await (const result of iterate(cursor)) {
+                    const entry = result.value;
+                    if (
+                        entry.lastAccess < minLastAccess ||
+                        count >= maxNumber
+                    ) {
+                        entriesToDelete.push(entry);
+                    } else {
+                        count += 1;
+                    }
                 }
+            });
+            if (entriesToDelete.length) {
+                const cache = await caches.open(cacheName);
+                await Promise.all(
+                    entriesToDelete.map(({ url }) => cache.delete(url)),
+                );
+                await db.transaction(
+                    cacheName,
+                    'readwrite',
+                    async (transaction) => {
+                        const store = transaction.objectStore(cacheName);
+                        // We check the lastAccess time has not changed so we
+                        // don't delete an updated entry if setInCache has
+                        // interleaved.
+                        await Promise.all(
+                            entriesToDelete.map(async (entryToDelete) => {
+                                const key = entryToDelete.url;
+                                const entry = await _(store.get(key));
+                                if (
+                                    entry.lastAccess ===
+                                    entryToDelete.lastAccess
+                                ) {
+                                    await _(store.delete(key));
+                                }
+                            }),
+                        );
+                    },
+                );
             }
-        });
-        if (entriesToDelete.length) {
-            const cache = await caches.open(cacheName);
-            await Promise.all(
-                entriesToDelete.map(({ url }) => cache.delete(url)),
-            );
-            await db.transaction(
-                cacheName,
-                'readwrite',
-                async (transaction) => {
-                    const store = transaction.objectStore(cacheName);
-                    // We check the lastAccess time has not changed so we don't
-                    //delete an updated entry if setInCache has interleaved.
-                    entriesToDelete.forEach(async (entryToDelete) => {
-                        const key = entryToDelete.url;
-                        const entry = await _(store.get(key));
-                        if (entry.lastAccess === entryToDelete.lastAccess) {
-                            store.delete(key);
-                        }
-                    });
-                },
-            );
-        }
+        } catch (error) {}
         if (rules.expiryInProgress > 1) {
             setTimeout(() => this.removeExpiredIn(cacheName), 0);
         }

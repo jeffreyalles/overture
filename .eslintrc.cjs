@@ -6,9 +6,8 @@ module.exports = {
     },
     plugins: ['overture', 'import', 'simple-import-sort'],
     extends: ['eslint:recommended', 'prettier', 'plugin:overture/recommended'],
-    parser: 'babel-eslint',
     parserOptions: {
-        ecmaVersion: 9,
+        ecmaVersion: '2020',
         sourceType: 'module',
     },
     rules: {
@@ -38,6 +37,7 @@ module.exports = {
         'no-new-func': 'error',
         'no-new-wrappers': 'error',
         'no-octal-escape': 'error',
+        'no-plusplus': 'error',
         'no-return-assign': 'error',
         'no-script-url': 'error',
         'no-self-compare': 'error',

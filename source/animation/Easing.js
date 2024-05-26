@@ -19,7 +19,8 @@
 
     Returns:
         {Function} A function representing the cubic bezier with the points
-        given.
+        given, with an equivalent CSS representation on the function's cssName
+        property.
 */
 const cubicBezier = function (p1x, p1y, p2x, p2y) {
     // Calculate constants in parametric bezier formular
@@ -52,6 +53,11 @@ const cubicBezier = function (p1x, p1y, p2x, p2y) {
     };
 
     const output = (x) => {
+        // Ends of the curve. Avoids divide by 0 issues with newton-raphson
+        // method.
+        if (x === 0 || x === 1) {
+            return x;
+        }
         const t = newtonRaphson(x);
         // This is y given t on the bezier curve.
         return t * (cY + t * (bY + t * aY));
@@ -125,6 +131,9 @@ const easeInOut = cubicBezier(0.42, 0, 0.58, 1);
     Function: O.Easing#linear
 
     Linear easing.
+
+    linear#cssName is a property which represents an equivalent CSS
+    representation for the method.
 
     Parameters:
         n - {Number} A number between 0 and 1 representing the current

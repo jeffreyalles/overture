@@ -17,23 +17,24 @@ export default function svg(options = {}) {
             const name = basename(id, '.svg');
             code = `import { setAttributes } from '/overture/dom';
 
-const src = \`${code}\`;
-
-let cachedNode = null;
-const drawIcon${name} = (props) => {
+var src = \`${code}\`;
+var cachedNode = null;
+function drawIcon${name} (props) {
     if (!cachedNode) {
         cachedNode = new DOMParser().parseFromString(src, 'image/svg+xml').firstChild;
         cachedNode.setAttribute('role', 'presentation');
-        // IE11 does not support classList on SVG
-        // SVG does not have a className property
-        cachedNode.setAttribute(
-            'class',
-            (cachedNode.getAttribute('class') || '') +
-                ' v-Icon i-${name.toLowerCase()}'
-        );
+        cachedNode.classList.add('v-Icon', 'i-${name.toLowerCase()}');
     }
-    const svg = cachedNode.cloneNode(true);
-    setAttributes(svg, props);
+    var svg = setAttributes(cachedNode.cloneNode(true), props);
+    var title = props && props.title;
+    if (title) {
+        var titleTag = document.createElementNS(
+            'http://www.w3.org/2000/svg',
+            'title'
+        );
+        titleTag.textContent = title;
+        svg.appendChild(titleTag);
+    }
     return svg;
 }
 

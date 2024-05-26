@@ -7,6 +7,8 @@ export {
     get,
     loc,
     localise,
+    list,
+    regionName,
     date,
     number,
     ordinal,
@@ -15,3 +17,4 @@ export {
     makeSearchRegExp,
     letterAlternatives,
 } from './i18n.js';
+export { regionNames } from './regionNames.js';

@@ -49,11 +49,10 @@ const PanZoomView = Class({
         const layer = this.get('layer');
         if (this.get('isInDocument')) {
             layer.addEventListener('load', this, true);
-            layer.addEventListener('webkitTransitionEnd', this, true);
             layer.addEventListener('transitionend', this, true);
+            this.contentDidResize();
         } else {
             layer.removeEventListener('load', this, true);
-            layer.removeEventListener('webkitTransitionEnd', this, true);
             layer.removeEventListener('transitionend', this, true);
         }
     }.observes('isInDocument'),
@@ -89,7 +88,7 @@ const PanZoomView = Class({
     }
         .nextLoop()
         .nextFrame()
-        .on('load', 'webkitTransitionEnd', 'transitionend'),
+        .on('load', 'transitionend'),
 
     positioning: 'relative',
 
@@ -140,7 +139,7 @@ const PanZoomView = Class({
 
     minScale: function () {
         return this.get('isInDocument')
-            ? Math.min(this.get('pxWidth') / this.get('scrollWidth'), 1)
+            ? limit(this.get('pxWidth') / this.get('scrollWidth'), 0.25, 1)
             : 1;
     }.property('pxWidth', 'scrollWidth'),
 

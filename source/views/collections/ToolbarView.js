@@ -1,4 +1,4 @@
-import { Class } from '../../core/Core.js';
+import { Class, isEqual } from '../../core/Core.js';
 import { lookupKey } from '../../dom/DOMEvent.js';
 import { create as el } from '../../dom/Element.js';
 import { loc } from '../../localisation/i18n.js';
@@ -83,9 +83,8 @@ const OverflowMenuView = Class({
 const viewIsBeforeFlex = function (view, flex) {
     const layer = view.get('layer');
     const childNodes = flex.parentNode.childNodes;
-    let l = childNodes.length;
-    while (l--) {
-        const node = childNodes[l];
+    for (let i = childNodes.length - 1; i >= 0; i -= 1) {
+        const node = childNodes[i];
         if (node === layer) {
             return false;
         }
@@ -126,7 +125,6 @@ const ToolbarView = Class({
                 right: [],
             },
         };
-        this._measureView = null;
         this._widths = {};
         this._flex = null;
     },
@@ -149,7 +147,7 @@ const ToolbarView = Class({
             this.get('isInDocument') &&
             this.get('preventOverlap')
         ) {
-            this.preMeasure().postMeasure();
+            this.measureViews();
         }
         return this;
     },
@@ -159,7 +157,7 @@ const ToolbarView = Class({
             this.registerView(name, views[name], true);
         }
         if (this.get('isInDocument') && this.get('preventOverlap')) {
-            this.preMeasure().postMeasure();
+            this.measureViews();
         }
         return this;
     },
@@ -203,6 +201,7 @@ const ToolbarView = Class({
 
     left: function () {
         let leftConfig = this.get('leftConfig');
+        let overflowConfig = null;
         if (this.get('preventOverlap')) {
             const rightConfig = this.get('rightConfig');
             const widths = this._widths;
@@ -237,39 +236,50 @@ const ToolbarView = Class({
             if (pxWidth < 0 || i < l) {
                 pxWidth -= widths.overflow;
 
-                while (pxWidth < 0 && i--) {
+                while (pxWidth < 0 && i > 0) {
+                    i -= 1;
                     pxWidth += widths[leftConfig[i]];
                 }
 
-                if (i < 0) {
-                    i = 0;
-                } else if (leftConfig[i] === '-') {
+                if (leftConfig[i] === '-') {
                     i -= 1;
                 }
-
-                const overflowMenuButton = this._views.overflow;
-                if (overflowMenuButton.get('isActive')) {
-                    overflowMenuButton.get('popOverView').hide();
-                }
-                overflowMenuButton.set(
-                    'menuView',
-                    new MenuView({
-                        showFilter: false,
-                        options: leftConfig
-                            .slice(i)
-                            .map(toView, this)
-                            .filter((view) => view instanceof View),
-                    }),
-                );
-
                 if (i > 0) {
+                    overflowConfig = leftConfig.slice(i);
                     leftConfig = leftConfig.slice(0, i);
                     leftConfig.push('overflow');
                 } else {
+                    overflowConfig = leftConfig;
                     leftConfig = ['overflow'];
                 }
             }
+        } else {
+            const i = leftConfig.indexOf('*');
+            if (i > -1) {
+                overflowConfig = leftConfig.slice(i);
+                leftConfig = leftConfig.slice(0, i);
+                leftConfig.push('overflow');
+            }
         }
+        if (
+            overflowConfig &&
+            !isEqual(this._oldOverflowConfig, overflowConfig)
+        ) {
+            const overflowMenuButton = this._views.overflow;
+            if (overflowMenuButton.get('isActive')) {
+                overflowMenuButton.get('popOverView').hide();
+            }
+            overflowMenuButton.set(
+                'menuView',
+                new MenuView({
+                    showFilter: false,
+                    options: overflowConfig
+                        .map(toView, this)
+                        .filter((view) => view instanceof View),
+                }),
+            );
+        }
+        this._oldOverflowConfig = overflowConfig;
         return leftConfig.map(toView, this);
     }.property('leftConfig', 'rightConfig', 'pxWidth'),
 
@@ -277,31 +287,24 @@ const ToolbarView = Class({
         return this.get('rightConfig').map(toView, this);
     }.property('rightConfig'),
 
-    preMeasure() {
-        this.insertView(
-            (this._measureView = new View({
-                className: 'v-Toolbar-measure',
-                layerStyles: {},
-                childViews: Object.values(this._views).filter(
-                    (view) => !view.get('parentView'),
-                ),
-                draw(layer) {
-                    return [
-                        el('span.v-Toolbar-divider'),
-                        View.prototype.draw.call(this, layer),
-                    ];
-                },
-            })),
-            null,
-            'top',
-        );
-        return this;
-    },
-
-    postMeasure() {
+    measureViews() {
         const widths = this._widths;
         const views = this._views;
-        const measureView = this._measureView;
+        const measureView = new View({
+            className: 'v-Toolbar-measure',
+            layerStyles: {},
+            childViews: Object.values(views).filter(
+                (view) => !view.get('parentView'),
+            ),
+            draw(layer) {
+                return [
+                    el('span.v-Toolbar-divider'),
+                    View.prototype.draw.call(this, layer),
+                ];
+            },
+        });
+        this.insertView(measureView, null, 'top');
+
         const unused = measureView.get('childViews');
         const container = measureView.get('layer');
         const containerBoundingClientRect = container.getBoundingClientRect();
@@ -320,28 +323,18 @@ const ToolbarView = Class({
             containerBoundingClientRect.left;
 
         this.removeView(measureView);
-        let l = unused.length;
-        while (l--) {
-            measureView.removeView(unused[l]);
+        for (let i = unused.length - 1; i >= 0; i -= 1) {
+            measureView.removeView(unused[i]);
         }
         measureView.destroy();
-        this._measureView = null;
 
-        return this;
-    },
-
-    willEnterDocument() {
-        ToolbarView.parent.willEnterDocument.call(this);
-        if (this.get('preventOverlap')) {
-            this.preMeasure();
-        }
         return this;
     },
 
     didEnterDocument() {
         ToolbarView.parent.didEnterDocument.call(this);
         if (this.get('preventOverlap')) {
-            this.postMeasure();
+            this.measureViews();
         }
         return this;
     },
@@ -369,23 +362,24 @@ const ToolbarView = Class({
 
     redrawSide(layer, isLeft, oldViews, newViews) {
         let start = 0;
-        let isEqual = true;
+        let isSideEqual = true;
         const flex = this._flex;
 
         for (let i = start, l = oldViews.length; i < l; i += 1) {
             const view = oldViews[i];
+            const newView = newViews[i];
             if (view instanceof View) {
-                if (isEqual && view === newViews[i]) {
+                if (isSideEqual && view === newView) {
                     start += 1;
                 } else {
-                    isEqual = false;
+                    isSideEqual = false;
                     // Check it hasn't already swapped sides!
                     if (viewIsBeforeFlex(view, flex) === isLeft) {
                         this.removeView(view);
                     }
                 }
             } else {
-                if (isEqual && !(newViews[i] instanceof View)) {
+                if (isSideEqual && newView && !(newView instanceof View)) {
                     start += 1;
                     newViews[i] = view;
                 } else {
@@ -413,7 +407,7 @@ const ToolbarView = Class({
 
     preventOverlapDidChange: function () {
         if (this.get('preventOverlap') && this.get('isInDocument')) {
-            this.preMeasure().postMeasure().computedPropertyDidChange('left');
+            this.measureViews().computedPropertyDidChange('left');
         }
     }
         .queue('after')

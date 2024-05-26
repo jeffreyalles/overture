@@ -83,6 +83,7 @@ const Drag = Class({
         this._lastTargetView = null;
 
         this.isNative = false;
+        this.isCanceled = false;
         this.dragSource = null;
         this.allowedEffects = ALL;
         this.dataSource = null;
@@ -108,6 +109,13 @@ const Drag = Class({
 
         Is this drag triggered by native drag/drop events rather than mouse
         up/down events?
+    */
+
+    /**
+        Property: O.Drag#isCanceled
+        Type: Boolean
+
+        Has this drag been canceled (so no effect should take place)?
     */
 
     /**
@@ -225,7 +233,7 @@ const Drag = Class({
                 }
             } else {
                 dragCursor = this._dragCursor = el('div', {
-                    style: 'position: fixed; z-index: 9999;',
+                    style: 'position: fixed; z-index: 9999; pointer-events: none',
                 });
                 this._updateDragImagePosition();
                 document.body.appendChild(dragCursor);
@@ -317,10 +325,10 @@ const Drag = Class({
             // Safari 11.1 supports the current dataTransfer.items interface,
             // but does not return anything until drop, so appears to have no
             // types. Old interface must be used instead.
-            let l = items ? items.length : 0;
-            if (l) {
-                while (l--) {
-                    const item = items[l];
+            const length = items && items.length;
+            if (length) {
+                for (let i = length - 1; i >= 0; i -= 1) {
+                    const item = items[i];
                     const itemType = item.type;
                     if (!hasFiles) {
                         hasFiles = item.kind === 'file';

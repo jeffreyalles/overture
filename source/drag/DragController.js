@@ -23,8 +23,25 @@ class TouchDragEvent {
     constructor(touch) {
         const clientX = touch.clientX;
         const clientY = touch.clientY;
-        const target =
-            document.elementFromPoint(clientX, clientY) || touch.target;
+
+        let target;
+        // Occasionally, we hit a "The provided double value is non-finite."
+        // error here. Let's log more info to see if we should normalize clientX
+        // and clientY.
+        try {
+            target =
+                document.elementFromPoint(clientX, clientY) || touch.target;
+        } catch (error) {
+            const newError = new Error(
+                'Invalid value provided to document.elementFromPoint',
+            );
+            newError.details = {
+                clientX,
+                clientY,
+                target: touch.target,
+            };
+            throw newError;
+        }
         this.touch = touch;
         this.clientX = clientX;
         this.clientY = clientY;
@@ -38,9 +55,8 @@ const getTouch = function (touches, touchId) {
     if (touchId === null) {
         return null;
     }
-    let l = touches.length;
-    while (l--) {
-        const touch = touches[l];
+    for (let i = touches.length - 1; i >= 0; i -= 1) {
+        const touch = touches[i];
         if (touch.identifier === touchId) {
             return touch;
         }
@@ -130,7 +146,7 @@ const DragController = new Obj({
     register(drag) {
         const oldDrag = this.drag;
         if (oldDrag) {
-            oldDrag.endDrag();
+            oldDrag.set('isCanceled', true).endDrag();
         }
         this.set('drag', drag);
     },
@@ -312,7 +328,7 @@ const DragController = new Obj({
         if (this._touchId !== null) {
             const touch = getTouch(event.touches, this._touchId);
             if (!touch) {
-                this.drag.endDrag();
+                this.drag.set('isCanceled', true).endDrag();
             }
         }
     }.on('touchstart'),
@@ -355,7 +371,7 @@ const DragController = new Obj({
     _onTouchcancel: function (event) {
         const touch = getTouch(event.changedTouches, this._touchId);
         if (touch) {
-            this.drag.endDrag();
+            this.drag.set('isCanceled', true).endDrag();
         }
     }.on('touchcancel'),
 
@@ -480,7 +496,7 @@ const DragController = new Obj({
     _onDragleave: function (/* event */) {
         const drag = this.drag;
         if (!(this._nativeRefCount -= 1) && drag) {
-            drag.endDrag();
+            drag.set('isCanceled', true).endDrag();
         }
     }.on('dragleave'),
 
@@ -493,6 +509,7 @@ const DragController = new Obj({
             event - {Event} The drop event.
     */
     _onDrop: function (event) {
+        this._nativeRefCount = 0;
         const drag = this.drag;
         if (drag) {
             if (drag.get('dropEffect') !== DEFAULT) {
@@ -513,6 +530,7 @@ const DragController = new Obj({
             event - {Event} The dragend event.
     */
     _onDragend: function (/* event */) {
+        this._nativeRefCount = 0;
         const drag = this.drag;
         if (drag) {
             drag.endDrag();
@@ -533,7 +551,7 @@ const DragController = new Obj({
     _escCancel: function (event) {
         const drag = this.drag;
         if (drag && lookupKey(event) === 'Escape') {
-            drag.endDrag();
+            drag.set('isCanceled', true).endDrag();
         }
     }.on('keydown'),
 });

@@ -19,12 +19,15 @@ const gestureManager = new Obj({
     isMouseDown: false,
 
     fire(type, event) {
-        if (/^touch/.test(type)) {
-            const gestures = this._gestures;
-            let l = gestures.length;
-            type = type.slice(5);
-            while (l--) {
-                gestures[l][type](event);
+        switch (true) {
+            case /^touch/.test(type):
+                type = type.slice(5);
+            /* falls through */
+            case type === 'scroll': {
+                const gestures = this._gestures;
+                for (let i = gestures.length - 1; i >= 0; i -= 1) {
+                    gestures[i][type](event);
+                }
             }
         }
         if (!event.button) {

@@ -13,11 +13,6 @@ const MenuOptionView = Class({
 
     Extends: View,
 
-    destroy() {
-        this.removeView(this.get('childViews')[0]);
-        MenuOptionView.parent.destroy.call(this);
-    },
-
     isFocused: false,
 
     layerTag: 'li',
@@ -47,6 +42,10 @@ const MenuOptionView = Class({
         }
     },
 
+    loseFocus() {
+        this.get('controller').focus(null);
+    },
+
     mousemove: function (event) {
         if (event.type === 'pointermove' && event.pointerType !== 'mouse') {
             return;
@@ -70,7 +69,7 @@ const MenuOptionView = Class({
             this.get('isFocused') &&
             !this.get('childViews')[0].get('isActive')
         ) {
-            this.get('controller').focus(null);
+            this.loseFocus();
         }
     }.on(canPointer ? 'pointerout' : 'mouseout'),
 });

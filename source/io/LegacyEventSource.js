@@ -31,7 +31,7 @@ class LegacyEventSource extends AbstractEventSource {
         };
 
         xhr.open('GET', this.url, true);
-        xhr.withCredentials = !!options.withCredentials;
+        xhr.withCredentials = options.credentials === 'include';
         xhr.responseType = 'text';
         for (const name in options.headers) {
             xhr.setRequestHeader(name, options.headers[name]);
@@ -63,8 +63,7 @@ class LegacyEventSource extends AbstractEventSource {
                 if (isEventStream) {
                     processData(xhr.response + '\n\n');
                 }
-                this._abortController = null;
-                this._didFinishFetch(isEventStream || !status, status);
+                this._didFinishFetch(xhr, isEventStream || !status, status);
             }
         };
         xhr.send();

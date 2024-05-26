@@ -1,7 +1,12 @@
 import { Animation } from '../../animation/Animation.js';
 import { Class, mixin } from '../../core/Core.js';
 import { appendChildren, create as el, setStyle } from '../../dom/Element.js';
-import { queueFn } from '../../foundation/RunLoop.js';
+import {
+    invokeAfterDelay,
+    invokeInNextEventLoop,
+    invokeInNextFrame,
+    queueFn,
+} from '../../foundation/RunLoop.js';
 import { browser, isIOS, version } from '../../ua/UA.js';
 import { RootView } from '../RootView.js';
 import { LAYOUT_FILL_PARENT, View } from '../View.js';
@@ -9,6 +14,10 @@ import { ViewEventsController } from '../ViewEventsController.js';
 
 /* { property, on, observes, queue } from */
 import '../../foundation/Decorators.js';
+
+// ---
+
+/*global document */
 
 class ScrollAnimation extends Animation {
     prepare(coordinates) {
@@ -39,6 +48,8 @@ class ScrollAnimation extends Animation {
 
 ScrollAnimation.prototype.duration = 250;
 
+const supportsScrollEnd = 'onscrollend' in document;
+
 /**
     Class: O.ScrollView
 
@@ -53,6 +64,15 @@ const ScrollView = Class({
     Name: 'ScrollView',
 
     Extends: View,
+
+    init: function () {
+        this._scrollSnap = '';
+        this._scrollSnapPause = 0;
+        this._scrollSnapResuming = false;
+        this._scrollendTimer = null;
+        this._scrollendCounter = 0;
+        ScrollView.parent.init.apply(this, arguments);
+    },
 
     /**
         Property: O.ScrollView#showScrollbarX
@@ -108,7 +128,9 @@ const ScrollView = Class({
         const styles = View.prototype.layerStyles.call(this);
         styles.overflowX = this.get('showScrollbarX') ? 'auto' : 'hidden';
         styles.overflowY = this.get('showScrollbarY') ? 'auto' : 'hidden';
-        styles.WebkitOverflowScrolling = 'touch';
+        if (isIOS && version < 13) {
+            styles.WebkitOverflowScrolling = 'touch';
+        }
         return styles;
     }.property('layout', 'positioning', 'showScrollbarX', 'showScrollbarY'),
 
@@ -146,23 +168,30 @@ const ScrollView = Class({
 
     willEnterDocument() {
         ScrollView.parent.willEnterDocument.call(this);
-        if (this.get('isFixedDimensions')) {
-            const scrollContents = this._scrollContents || this.get('layer');
-            scrollContents.appendChild(
-                (this._safeAreaPadding = el('div.v-Scroll-safeAreaPadding')),
-            );
+        if (this.get('showScrollbarY')) {
             this.getParent(RootView).addObserverForKey(
                 'safeAreaInsetBottom',
                 this,
                 'redrawSafeArea',
             );
-            this.redrawSafeArea();
+            if (this.get('isFixedDimensions')) {
+                const scrollContents =
+                    this._scrollContents || this.get('layer');
+                scrollContents.appendChild(
+                    (this._safeAreaPadding = el(
+                        'div.v-Scroll-safeAreaPadding',
+                    )),
+                );
+                this.redrawSafeArea();
+            }
         }
-        return this;
+        return this.pauseScrollSnap();
     },
 
     didEnterDocument() {
-        this.get('layer').addEventListener('scroll', this, false);
+        const layer = this.get('layer');
+        layer.addEventListener('scroll', this, false);
+        layer.addEventListener('scrollend', this, false);
 
         // Add keyboard shortcuts:
         const keys = this.get('keys');
@@ -171,7 +200,8 @@ const ScrollView = Class({
             shortcuts.register(key, this, keys[key]);
         }
 
-        return ScrollView.parent.didEnterDocument.call(this);
+        ScrollView.parent.didEnterDocument.call(this);
+        return this.resumeScrollSnap();
     },
 
     willLeaveDocument() {
@@ -182,7 +212,9 @@ const ScrollView = Class({
             shortcuts.deregister(key, this, keys[key]);
         }
 
-        this.get('layer').removeEventListener('scroll', this, false);
+        const layer = this.get('layer');
+        layer.removeEventListener('scroll', this, false);
+        layer.removeEventListener('scrollend', this, false);
 
         return ScrollView.parent.willLeaveDocument.call(this);
     },
@@ -190,13 +222,15 @@ const ScrollView = Class({
     didLeaveDocument() {
         const safeAreaPadding = this._safeAreaPadding;
         if (safeAreaPadding) {
+            safeAreaPadding.parentNode.removeChild(safeAreaPadding);
+            this._safeAreaPadding = null;
+        }
+        if (this.get('showScrollbarY')) {
             this.getParent(RootView).removeObserverForKey(
                 'safeAreaInsetBottom',
                 this,
                 'redrawSafeArea',
             );
-            safeAreaPadding.parentNode.removeChild(safeAreaPadding);
-            this._safeAreaPadding = null;
         }
         return ScrollView.parent.didLeaveDocument.call(this);
     },
@@ -211,8 +245,13 @@ const ScrollView = Class({
     },
 
     redrawSafeArea() {
-        this._safeAreaPadding.style.height =
-            this.getParent(RootView).get('safeAreaInsetBottom') + 'px';
+        const safeAreaPadding = this._safeAreaPadding;
+        if (safeAreaPadding) {
+            this._safeAreaPadding.style.height =
+                this.getParent(RootView).get('safeAreaInsetBottom') + 'px';
+        } else {
+            this.didResize();
+        }
     },
 
     // ---
@@ -258,7 +297,7 @@ const ScrollView = Class({
     },
 
     didAnimate() {
-        this.set('isAnimating', false);
+        this.set('isAnimating', false).fire('scrollend');
     },
 
     /**
@@ -391,20 +430,28 @@ const ScrollView = Class({
         x = x < 0 ? 0 : Math.round(x);
         y = y < 0 ? 0 : Math.round(y);
 
+        const isInDocument = this.get('isInDocument');
         const scrollAnimation = this.get('scrollAnimation');
         scrollAnimation.stop();
 
-        if (withAnimation && this.get('isInDocument')) {
+        if (withAnimation && isInDocument) {
             scrollAnimation.animate({
                 x,
                 y,
             });
         } else {
+            if (isInDocument) {
+                this.pauseScrollSnap();
+            }
             this.beginPropertyChanges()
                 .set('scrollLeft', x)
                 .set('scrollTop', y)
                 .propertyNeedsRedraw(this, 'scroll')
-                .endPropertyChanges();
+                .endPropertyChanges()
+                .fire('scrollend');
+            if (isInDocument) {
+                this.resumeScrollSnap();
+            }
         }
         return this;
     },
@@ -428,12 +475,65 @@ const ScrollView = Class({
         const layer = this.get('layer');
         const x = this.get('scrollLeft');
         const y = this.get('scrollTop');
+        const styles = layer.style;
+        // As of at least iOS 15.4 and all predecessors, if iOS is currently
+        // doing momentum scrolling and you change the scroll position, it
+        // ignores the change and continues applying the precalculated scroll
+        // positions. So you end up in the wrong place. It also often fails to
+        // redraw correctly so it looks completely broken until you scroll
+        // again.
+        if (isIOS) {
+            styles.overflowX = 'hidden';
+            styles.overflowY = 'hidden';
+        }
         layer.scrollLeft = x;
         layer.scrollTop = y;
+        if (isIOS) {
+            styles.overflowX = this.get('showScrollbarX') ? 'auto' : 'hidden';
+            styles.overflowY = this.get('showScrollbarY') ? 'auto' : 'hidden';
+        }
         // In case we've gone past the end.
         if (x || y) {
             queueFn('after', this.syncBackScroll, this);
         }
+    },
+
+    pauseSnapWhileAnimating: function () {
+        if (this.get('isAnimating')) {
+            this.pauseScrollSnap();
+        } else {
+            this.resumeScrollSnap();
+        }
+    }.observes('isAnimating'),
+
+    pauseScrollSnap() {
+        if ((this._scrollSnapPause += 1) === 1 && !this._scrollSnapResuming) {
+            const layer = this.get('layer');
+            const scrollSnapType = layer.style.scrollSnapType;
+            layer.style.scrollSnapType = 'none';
+            this._scrollSnap = scrollSnapType;
+        }
+        return this;
+    },
+
+    resumeScrollSnap() {
+        const scrollSnapType = this._scrollSnap;
+        if (
+            (this._scrollSnapPause -= 1) === 0 &&
+            scrollSnapType !== 'none' &&
+            !this._scrollSnapResuming
+        ) {
+            this._scrollSnapResuming = true;
+            invokeInNextFrame(() => {
+                invokeInNextEventLoop(() => {
+                    this._scrollSnapResuming = false;
+                    if (this._scrollSnapPause === 0) {
+                        this.get('layer').style.scrollSnapType = scrollSnapType;
+                    }
+                });
+            });
+        }
+        return this;
     },
 
     /**
@@ -458,7 +558,25 @@ const ScrollView = Class({
         if (event) {
             event.stopPropagation();
         }
+        if (!supportsScrollEnd && !this.get('isAnimating')) {
+            this._simulateScrollEnd();
+        }
     }.on('scroll'),
+
+    _simulateScrollEnd() {
+        const counter = (this._scrollendCounter += 1);
+        if (this._scrollendTimer) {
+            return;
+        }
+        this._scrollendTimer = invokeAfterDelay(() => {
+            this._scrollendTimer = null;
+            if (counter === this._scrollendCounter) {
+                this.fire('scrollend');
+            } else {
+                this._simulateScrollEnd();
+            }
+        }, 1000);
+    },
 
     // ---
 

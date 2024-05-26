@@ -68,9 +68,8 @@ class RecordAttribute {
                     );
                     dependents = attrErrorsMetadata.dependents;
                 }
-                let l = dependencies.length;
-                while (l--) {
-                    const key = dependencies[l];
+                for (let i = dependencies.length - 1; i >= 0; i -= 1) {
+                    const key = dependencies[i];
                     if (!dependents[key]) {
                         dependents[key] = [];
                         if (
@@ -327,11 +326,7 @@ Object.assign(RecordAttribute.prototype, {
                     if (storeKey) {
                         const update = {};
                         update[attrKey] = attrValue;
-                        store.updateData(
-                            storeKey,
-                            update,
-                            !(this.noSync || record._noSync),
-                        );
+                        store.updateData(storeKey, update, !record._noSync);
                         store.fire('record:user:update', { record: this });
                     } else {
                         data[attrKey] = attrValue;

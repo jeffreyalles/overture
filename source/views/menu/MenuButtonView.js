@@ -1,13 +1,28 @@
-import { Class } from '../../core/Core.js';
+import { Class, isEqual } from '../../core/Core.js';
+import { getViewFromNode } from '../activeViews.js';
 import { ButtonView } from '../controls/ButtonView.js';
+import { FileButtonView } from '../controls/FileButtonView.js';
 import { PopOverView } from '../panels/PopOverView.js';
 import { RootView } from '../RootView.js';
+import { MenuFilterView } from './MenuFilterView.js';
 import { MenuOptionView } from './MenuOptionView.js';
 
 /* { observes, on, property, queue } from */
 import '../../foundation/Decorators.js';
 
 /*global document */
+
+function getClientCoords(touch) {
+    const clientX =
+        -Infinity < touch.clientX && touch.clientX < Infinity
+            ? touch.clientX
+            : null;
+    const clientY =
+        -Infinity < touch.clientY && touch.clientY < Infinity
+            ? touch.clientY
+            : null;
+    return { x: clientX, y: clientY };
+}
 
 /**
     Class: O.MenuButtonView
@@ -252,6 +267,104 @@ const MenuButtonView = Class({
         }
         this.activate(event);
     }.on('mousedown'),
+
+    _activateOnTouchstart: function (event) {
+        if (this.get('isInMenu')) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        this._didMove = false;
+        this._touchedView = null;
+        this._initialCoords = getClientCoords(event.touches[0]);
+        this.focus();
+        this.activate(event);
+    }.on('touchstart'),
+
+    _handleTouchmove: function (event) {
+        const initialCoords = this._initialCoords;
+        const touch = event.changedTouches[0];
+        if (!initialCoords || !touch) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const coords = getClientCoords(touch);
+        if (
+            coords.x === null ||
+            coords.y === null ||
+            isEqual(coords, initialCoords)
+        ) {
+            return;
+        }
+
+        const node = document.elementFromPoint(coords.x, coords.y);
+        if (!node) {
+            return;
+        }
+        const view = getViewFromNode(node);
+        if (!view) {
+            return;
+        }
+
+        this._didMove = true;
+
+        const menuOption =
+            (view instanceof MenuOptionView && view) ||
+            view.getParent(MenuOptionView);
+        const lastView = this._touchedView;
+        if (menuOption) {
+            if (menuOption !== lastView) {
+                this._initialCoords = coords;
+                menuOption.takeFocus();
+            }
+        } else if (lastView instanceof MenuOptionView) {
+            lastView.loseFocus();
+        }
+
+        this._touchedView =
+            menuOption ||
+            (!(view instanceof MenuFilterView) &&
+                view.getParent(MenuFilterView)) ||
+            view;
+    }.on('touchmove'),
+
+    _handleTouchend: function (event) {
+        if (!this._initialCoords) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const view = this._touchedView;
+        const didMove = this._didMove;
+        this._didMove = false;
+        this._touchedView = null;
+        this._initialCoords = null;
+        if (
+            !didMove ||
+            !view ||
+            view === this ||
+            view === this.get('popOverView') ||
+            view.getParent(MenuButtonView) === this
+        ) {
+            return;
+        }
+        if (view instanceof MenuOptionView) {
+            const button = view.getFromPath('content.button');
+            if (button instanceof FileButtonView) {
+                button.fire('confirm', event);
+                this.get('popOverView').hide();
+            } else {
+                view.get('controller').selectFocused();
+            }
+        } else if (view instanceof MenuFilterView) {
+            view.focus();
+        } else {
+            this.get('popOverView').hide();
+        }
+    }.on('touchend'),
 });
 
 export { MenuButtonView };

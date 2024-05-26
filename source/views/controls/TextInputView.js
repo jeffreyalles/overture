@@ -1,16 +1,13 @@
 /*global document, getComputedStyle */
 
-import { meta, Class } from '../../core/Core.js';
+import { Class, meta } from '../../core/Core.js';
 import { lookupKey } from '../../dom/DOMEvent.js';
 import { create as el, nearest } from '../../dom/Element.js';
-import { browser } from '../../ua/UA.js';
 import { ScrollView } from '../containers/ScrollView.js';
 import { AbstractInputView } from './AbstractInputView.js';
 
 /* { property, nocache, on, observes } from */
 import '../../foundation/Decorators.js';
-
-const isFirefox = browser === 'firefox';
 
 /**
     Class: O.TextInputView
@@ -30,6 +27,16 @@ const TextInputView = Class({
         this._settingFromInput = false;
         this._verticalBorderWidth = 0;
     },
+
+    /**
+        Property: O.TextInputView#autocomplete
+        Type: AutoCompleteController | null
+        Default: null
+
+        Can be set to an instance of the AutoCompleteController class to show
+        autocomplete suggestions for this input.
+    */
+    autocomplete: null,
 
     /**
         Property: O.TextInputView#isMultiline
@@ -70,8 +77,6 @@ const TextInputView = Class({
         Default: "text"
 
         The type property for the <input> DOM node (e.g. "password", "tel" etc.)
-
-        This property *must not* be changed after the view has been rendered.
     */
     inputType: 'text',
 
@@ -83,6 +88,16 @@ const TextInputView = Class({
         Placeholder text to be displayed in the text input when it is empty.
     */
     placeholder: undefined,
+
+    /**
+        Property: O.TextInputView#ghost
+        Type: Change | null
+        Default: null
+
+        The ghost property is a Change object, which causes the input view to
+        draw the change as ghost text if desired.
+    */
+    ghost: null,
 
     /**
         Property: O.TextInputView#value
@@ -110,9 +125,6 @@ const TextInputView = Class({
         When used as a setter, you can give it an object as described above to
         set the selection, or if you just want to give it a cursor position, you
         can pass a number instead.
-
-        Note, this property is *not observable* and cannot be used to monitor
-        changes in selection/cursor position.
 
     */
     selection: function (selection) {
@@ -153,6 +165,10 @@ const TextInputView = Class({
         .property()
         .nocache(),
 
+    invalidateSelection: function () {
+        this.computedPropertyDidChange('selection');
+    }.on('click', 'selectionchange'),
+
     /**
         Property: O.TextInputView#blurOnKeys
         Type: Object
@@ -179,17 +195,19 @@ const TextInputView = Class({
         is-focused  - The <#isFocused> property is true.
         is-invalid   - The <#isValid> property is false.
         is-disabled  - The <#isDisabled> property is true.
+        has-ghost  - The <#ghost> property is set.
     */
     className: function () {
         const type = this.get('type');
         return (
-            'v-TextInput' +
+            this.get('baseClassName') +
             (this.get('isExpanding') ? ' v-TextInput--expanding' : '') +
             (this.get('isMultiline') ? ' v-TextInput--multiline' : '') +
             (this.get('isHighlighted') ? ' is-highlighted' : '') +
             (this.get('isFocused') ? ' is-focused' : '') +
             (this.get('isValid') ? '' : ' is-invalid') +
             (this.get('isDisabled') ? ' is-disabled' : '') +
+            (this.get('ghost') ? ' has-ghost' : '') +
             (type ? ' ' + type : '')
         );
     }.property(
@@ -199,21 +217,33 @@ const TextInputView = Class({
         'isFocused',
         'isValid',
         'isDisabled',
+        'ghost',
     ),
+
+    drawGhost() {
+        const change = this.get('ghost');
+        this._ghost = change
+            ? el('span.v-TextInput-ghost', change.draw(this.get('value')))
+            : document.createComment('ghost');
+        return this._ghost;
+    },
 
     drawControl() {
         const isMultiline = this.get('isMultiline');
-        return (this._domControl = el(isMultiline ? 'textarea' : 'input', {
-            id: this.get('id') + '-input',
-            className: this.get('baseClassName') + '-input',
-            rows: isMultiline ? '1' : undefined,
-            name: this.get('name'),
-            type: this.get('inputType'),
-            disabled: this.get('isDisabled'),
-            tabIndex: this.get('tabIndex'),
-            placeholder: this.get('placeholder') || undefined,
-            value: this.get('value'),
-        }));
+        return el('div.v-TextInput-control', [
+            (this._domControl = el(isMultiline ? 'textarea' : 'input', {
+                id: this.get('id') + '-input',
+                className: 'v-TextInput-input',
+                rows: isMultiline ? '1' : undefined,
+                name: this.get('name'),
+                type: this.get('inputType'),
+                disabled: this.get('isDisabled'),
+                tabIndex: this.get('tabIndex'),
+                placeholder: this.get('placeholder') || undefined,
+                value: this.get('value'),
+            })),
+            this.drawGhost(),
+        ]);
     },
 
     // --- Keep render in sync with state ---
@@ -232,7 +262,7 @@ const TextInputView = Class({
         if (isValue && this.get('isExpanding')) {
             this.propertyNeedsRedraw(self, 'textHeight', oldValue);
         }
-    }.observes('value', 'isExpanding', 'placeholder'),
+    }.observes('value', 'isExpanding', 'placeholder', 'inputType', 'ghost'),
 
     /**
         Method: O.TextInputView#redrawPlaceholder
@@ -244,15 +274,24 @@ const TextInputView = Class({
         this._domControl.placeholder = this.get('placeholder');
     },
 
-    redrawTextHeight() {
-        // Firefox gets pathologically slow when resizing really large text
-        // areas, so automatically turn this off in such a case.
-        // 2^13 chars is an arbitrary cut off point that seems to be reasonable
-        // in practice
-        if (isFirefox && (this.get('value') || '').length > 8192) {
-            this.set('isExpanding', false);
-            return;
+    redrawInputType() {
+        this._domControl.type = this.get('inputType');
+    },
+
+    redrawGhost() {
+        const oldGhost = this._ghost;
+        oldGhost.parentNode.replaceChild(this.drawGhost(), oldGhost);
+        this.updateGhostScroll();
+    },
+
+    updateGhostScroll() {
+        const ghost = this._ghost;
+        if (ghost.nodeType === 1) {
+            ghost.scrollLeft = this.get('scrollLeft');
         }
+    },
+
+    redrawTextHeight() {
         const control = this._domControl;
         const style = control.style;
         const scrollView = this.getParent(ScrollView);
@@ -269,6 +308,7 @@ const TextInputView = Class({
         if (scrollView) {
             scrollView.redrawScroll();
         }
+        this.didResize();
     },
 
     redrawIsExpanding() {
@@ -276,6 +316,7 @@ const TextInputView = Class({
             this.redrawTextHeight();
         } else {
             this._domControl.style.height = 'auto';
+            this.didResize();
             // Scroll to cursor
             if (this.get('isFocused')) {
                 this.blur().focus();
@@ -320,6 +361,7 @@ const TextInputView = Class({
     */
     didEnterDocument() {
         TextInputView.parent.didEnterDocument.call(this);
+        const control = this._domControl;
         if (this.get('isMultiline')) {
             if (this.get('isExpanding')) {
                 const style = getComputedStyle(this._domControl);
@@ -331,7 +373,6 @@ const TextInputView = Class({
                 this.redrawTextHeight();
             }
             // Restore scroll positions:
-            const control = this._domControl;
             const left = this.get('scrollLeft');
             const top = this.get('scrollTop');
             if (left) {
@@ -340,8 +381,8 @@ const TextInputView = Class({
             if (top) {
                 control.scrollTop = top;
             }
-            control.addEventListener('scroll', this, false);
         }
+        control.addEventListener('scroll', this, false);
         const selection = this.get('savedSelection');
         if (selection) {
             this.set('selection', selection).focus();
@@ -363,9 +404,7 @@ const TextInputView = Class({
             this.blur();
         }
         // Stop listening for scrolls:
-        if (this.get('isMultiline')) {
-            this._domControl.removeEventListener('scroll', this, false);
-        }
+        this._domControl.removeEventListener('scroll', this, false);
         return TextInputView.parent.willLeaveDocument.call(this);
     },
 
@@ -387,6 +426,7 @@ const TextInputView = Class({
             .set('scrollLeft', left)
             .set('scrollTop', top)
             .endPropertyChanges();
+        this.updateGhostScroll();
 
         event.stopPropagation();
     }.on('scroll'),
@@ -458,6 +498,13 @@ const TextInputView = Class({
             this.blur();
         }
     }.on('keyup'),
+
+    attachAutoComplete: function () {
+        const autocomplete = this.get('autocomplete');
+        if (autocomplete) {
+            autocomplete.attach(this);
+        }
+    }.on('focus'),
 });
 
 /* Don't redraw when the user is typing; we handle redrawing value in

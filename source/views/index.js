@@ -12,6 +12,8 @@ export {
 } from './View.js';
 export { activeViews, getViewFromNode } from './activeViews.js';
 export { ViewEventsController } from './ViewEventsController.js';
+export { AutoCompleteView } from './autocomplete/AutoCompleteView.js';
+export { AutoCompleteOptionView } from './autocomplete/AutoCompleteOptionView.js';
 export { ListItemView } from './collections/ListItemView.js';
 export { ListKBFocusView } from './collections/ListKBFocusView.js';
 export { ListView } from './collections/ListView.js';
@@ -43,6 +45,7 @@ export { ClearSearchButtonView } from './controls/ClearSearchButtonView.js';
 export { FileButtonView } from './controls/FileButtonView.js';
 export { TextView } from './content/TextView.js';
 export { KeyDownController } from './controls/KeyDownController.js';
+export { PasswordInputView } from './controls/PasswordInputView.js';
 export { RadioGroupView } from './controls/RadioGroupView.js';
 export {
     ShortcutView,
@@ -58,6 +61,7 @@ export {
     RichTextView,
     TOOLBAR_HIDDEN,
     TOOLBAR_AT_TOP,
+    TOOLBAR_ABOVE_KEYBOARD,
 } from './controls/RichTextView.js';
 export { SearchInputView } from './controls/SearchInputView.js';
 export { SelectView } from './controls/SelectView.js';

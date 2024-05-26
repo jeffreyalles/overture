@@ -1,4 +1,4 @@
-/*global window, document, navigator */
+/*global document, navigator */
 
 /**
     Module: UA
@@ -9,6 +9,9 @@
 
 const ua = navigator.userAgent.toLowerCase();
 const other = ['other', '0'];
+// Support loading UA in workers, which don't define document
+const documentElement =
+    typeof document !== 'undefined' ? document.documentElement : {};
 
 /**
     Namespace: O.UA
@@ -104,7 +107,7 @@ export const version = parseFloat(
 
     Does the browser support touch events?
 */
-export const canTouch = 'ontouchstart' in document.documentElement;
+export const canTouch = 'ontouchstart' in documentElement;
 
 /**
     Property: O.UA.canPointer
@@ -112,16 +115,4 @@ export const canTouch = 'ontouchstart' in document.documentElement;
 
     Does the browser support pointer events?
 */
-export const canPointer = 'onpointerdown' in document.documentElement;
-
-/**
-    Property: O.UA.canU2F
-    Type: Boolean
-
-    Does the browser probably support U2F?
-*/
-// See http://caniuse.com/#feat=u2f
-// Chrome 41+ supports it but exposes no obvious global; Firefox has it
-// disabled by default but if enabled by security.webauth.u2f exposes a
-// global called U2F.
-export const canU2F = (browser === 'chrome' && version >= 41) || !!window.U2F;
+export const canPointer = 'onpointerdown' in documentElement;

@@ -96,7 +96,7 @@ Date.formatDuration = formatDuration;
         date   - {Date} Date to compare it to.
         approx - {Boolean} (optional) If true, only return a string for the
                  most significant part of the relative time (e.g. just "5
-                 hours ago" instead of "5 hours 34 mintues ago").
+                 hours ago" instead of "5 hours 34 minutes ago").
         mustNotBeFuture - {Boolean} (optional) If true and a date is supplied in
                           the future, it is assumed this is due to clock skew
                           and the string "just now" is always returned.
@@ -173,11 +173,11 @@ Date.prototype.relativeToByDay = function (date) {
 
     const duration = date - this;
     if (duration < 1000 * 60 * 60 * 24) {
-        return loc("Today").toLocaleLowerCase();
+        return loc('Today').toLocaleLowerCase();
     }
 
     return this.relativeTo(date, true, true);
-}
+};
 
 // TODO(cmorgan/modulify): do something about these exports:
 // Date#relativeTo, Date.formatDuration

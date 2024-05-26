@@ -95,23 +95,23 @@ const PopOverView = Class({
         this.insertView(options.view, this._popOver);
 
         if (safeAreaInsetBottom) {
-            layout.paddingBottom = safeAreaInsetBottom;
+            layout.marginBottom = safeAreaInsetBottom;
         }
         switch (positionToThe) {
             case 'top':
-                layout.paddingBottom = Math.max(
+                layout.marginBottom = Math.max(
                     safeAreaInsetBottom,
                     rootView.get('pxHeight') - posTop - offsetTop,
                 );
                 break;
             case 'right':
-                layout.paddingLeft = posLeft + posWidth + offsetLeft;
+                layout.marginLeft = posLeft + posWidth + offsetLeft;
                 break;
             case 'bottom':
-                layout.paddingTop = posTop + posHeight + offsetTop;
+                layout.marginTop = posTop + posHeight + offsetTop;
                 break;
             case 'left':
-                layout.paddingRight =
+                layout.marginRight =
                     rootView.get('pxWidth') - posLeft - offsetLeft;
                 break;
         }
@@ -196,10 +196,10 @@ const PopOverView = Class({
         of the parent view.
     */
     parentMargin: {
-        top: 10,
-        left: 10,
-        right: 10,
-        bottom: 10,
+        top: 12,
+        left: 12,
+        right: 12,
+        bottom: 12,
     },
 
     keepInBounds: function () {
@@ -212,7 +212,7 @@ const PopOverView = Class({
         const positionToThe = options.positionToThe;
         const positionToTheLeftOrRight =
             positionToThe === 'left' || positionToThe === 'right';
-        const parentMargin = this.get('parentMargin');
+        const parentMargin = options.parentMargin || this.get('parentMargin');
         let keepInVerticalBounds = options.keepInVerticalBounds;
         let keepInHorizontalBounds = options.keepInHorizontalBounds;
         const calloutOffsetLeft = options.calloutOffsetLeft || 0;
@@ -331,8 +331,10 @@ const PopOverView = Class({
         this.set('options', options);
         alignWithView.getParent(RootView).insertView(this);
 
-        const eventHandler = this.get('eventHandler');
-        ViewEventsController.addEventTarget(eventHandler, 10);
+        if (!options.allowEventsOutside) {
+            const eventHandler = this.get('eventHandler');
+            ViewEventsController.addEventTarget(eventHandler, 10);
+        }
         this.set('isVisible', true);
 
         return this;
@@ -448,6 +450,7 @@ const PopOverView = Class({
         'keydown',
         'keyup',
         'tap',
+        'contextmenu',
     ),
 });
 

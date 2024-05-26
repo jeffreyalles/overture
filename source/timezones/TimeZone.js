@@ -1,3 +1,5 @@
+import { mod } from '../core/Math.js';
+
 import '../core/Date.js'; // For Date#add
 import '../core/String.js'; // For String#format
 
@@ -6,10 +8,10 @@ import '../core/String.js'; // For String#format
 // e.g. [ +new Date(), -3600, 'EU', 'CE%sT' ]
 
 const getPeriod = function (periods, date, isUTC) {
-    let l = periods.length - 1;
-    let period = periods[l];
-    while (l--) {
-        const candidate = periods[l];
+    const lastIndex = periods.length - 1;
+    let period = periods[lastIndex];
+    for (let i = lastIndex - 1; i >= 0; i -= 1) {
+        const candidate = periods[i];
         if (candidate[0] < date - (isUTC ? 0 : candidate[1])) {
             break;
         }
@@ -23,14 +25,17 @@ const getPeriod = function (periods, date, isUTC) {
 //      utc=0/local=1/wall=2, offset (secs), suffix ]
 // e.g. [ 1987, 2006, 4, 3, 0, 0, 2, 0, 2, 3600, 'BST' ]
 
+const tzRules = {
+    '-': [],
+};
+
 const getRule = function (rules, offset, datetime, isUTC, recurse) {
-    let l = rules.length;
     const year = datetime.getUTCFullYear();
     let ruleInEffect = null;
     let prevRule;
     let dateInEffect;
-    while (l--) {
-        const rule = rules[l];
+    for (let i = rules.length - 1; i >= 0; i -= 1) {
+        const rule = rules[i];
         // Sorted by end year. So if ends before this date, no further rules
         // can apply.
         if (rule[1] < year) {
@@ -52,7 +57,11 @@ const getRule = function (rules, offset, datetime, isUTC, recurse) {
                 const difference =
                     (Math.abs(day) - ruleDate.getUTCDay() + 6) % 7;
                 if (difference) {
-                    ruleDate.add(day < 1 ? difference - 7 : difference);
+                    ruleDate.add(
+                        day < 1 ? difference - 7 : difference,
+                        'day',
+                        true,
+                    );
                 }
             }
 
@@ -64,7 +73,7 @@ const getRule = function (rules, offset, datetime, isUTC, recurse) {
             // Now match up timezones
             const ruleIsUTC = !rule[8];
             if (ruleIsUTC !== isUTC) {
-                ruleDate.add((ruleIsUTC ? 1 : -1) * offset, 'second');
+                ruleDate.add((ruleIsUTC ? 1 : -1) * offset, 'second', true);
                 // We need to add the offset of the previous rule. Sigh.
                 // The maximum time offset from a rule is 2 hours. So if within
                 // 3 hours, find the rule for the previous day.
@@ -83,6 +92,7 @@ const getRule = function (rules, offset, datetime, isUTC, recurse) {
                         ruleDate.add(
                             (ruleIsUTC ? 1 : -1) * prevRule[9],
                             'second',
+                            true,
                         );
                     }
                 }
@@ -92,7 +102,7 @@ const getRule = function (rules, offset, datetime, isUTC, recurse) {
             // or invalid. We should pick the rule to follow RFC5545 guidance:
             // Presume the earlier rule is still in effect in both cases
             if (!isUTC) {
-                ruleDate.add(rule[9], 'second');
+                ruleDate.add(rule[9], 'second', true);
                 if (Math.abs(ruleDate - datetime) <= 3 * 60 * 60 * 1000) {
                     prevRule =
                         prevRule ||
@@ -104,7 +114,7 @@ const getRule = function (rules, offset, datetime, isUTC, recurse) {
                             true,
                         );
                     if (prevRule) {
-                        ruleDate.add(prevRule[9], 'second');
+                        ruleDate.add(prevRule[9], 'second', true);
                     }
                 }
             }
@@ -131,79 +141,104 @@ const getRule = function (rules, offset, datetime, isUTC, recurse) {
     return ruleInEffect;
 };
 
-const switchSign = function (string) {
-    return string.replace(/[+-]/, (sign) => (sign === '+' ? '-' : '+'));
-};
+const idToTZ = new Map();
+const getTimeZoneById = (id) => idToTZ.get(id) || null;
 
 class TimeZone {
     constructor(id, periods) {
-        let name = id.replace(/_/g, ' ');
-        // The IANA ids have the +/- the wrong way round for historical reasons.
-        // Display correctly for the user.
-        if (/GMT[+-]/.test(name)) {
-            name = switchSign(name);
-        }
-        if (name === 'Europe/Kiev') {
-            name = 'Europe/Kyiv';
-        }
-
         this.id = id;
-        this.name = name;
         this.periods = periods;
     }
 
     convert(date, toTimeZone) {
-        const period = getPeriod(this.periods, date);
-        let offset = period[1];
+        const [, offset, daylightSavingsRule] = getPeriod(this.periods, date);
         const rule = getRule(
-            TimeZone.rules[period[2]] || [],
+            tzRules[daylightSavingsRule || '-'],
             offset,
             date,
             toTimeZone,
             true,
         );
+        let effectiveOffset = offset;
         if (rule) {
-            offset += rule[9];
+            effectiveOffset += rule[9];
         }
         if (!toTimeZone) {
-            offset = -offset;
+            effectiveOffset = -effectiveOffset;
         }
-        return new Date(+date + offset * 1000);
+        return new Date(+date + effectiveOffset * 1000);
     }
+
     convertDateToUTC(date) {
         return this.convert(date, false);
     }
+
     convertDateToTimeZone(date) {
         return this.convert(date, true);
     }
+
     getSuffix(date) {
-        const period = getPeriod(this.periods, date, false);
-        const offset = period[1];
+        return this.getTZAbbr(date) || this.getGMTAbbr(date);
+    }
+
+    getTZAbbr(date) {
+        const [, offset, daylightSavingsRule, suffix] = getPeriod(
+            this.periods,
+            date,
+            false,
+        );
         let rule = getRule(
-            TimeZone.rules[period[2]],
+            tzRules[daylightSavingsRule || '-'],
             offset,
             date,
             false,
             true,
         );
-        let suffix = period[3];
+        let abbr = suffix;
         const slashIndex = suffix.indexOf('/');
         // If there's a slash, e.g. "GMT/BST", presume first if no time offset,
         // second if time offset.
         if (rule && slashIndex > -1) {
-            suffix = rule[9]
-                ? suffix.slice(slashIndex + 1)
-                : suffix.slice(0, slashIndex);
+            abbr = rule[9]
+                ? abbr.slice(slashIndex + 1)
+                : abbr.slice(0, slashIndex);
             rule = null;
         }
-        return suffix.format(rule ? rule[10] : '');
+        // If there's no rule but the time zone abbreviation includes %s, use
+        // "S" for standard. The format description doesn't specify exactly
+        // what should happen here, but the only two letters used are "S" (for
+        // standard) and "D" (for daylight), and if there's no rule there's no
+        // DST, therefore using "S" in the absence of a rule makes sense.
+        //
+        // This affects time zones where there used to be DST, but isn't any
+        // more such as Perth and Brisbane.
+        abbr = abbr.format(rule ? rule[10] : 'S');
+        // If it's just +/- (number), there's no abbreviation for a name.
+        if (/^[-+]/.test(abbr)) {
+            return '';
+        }
+        return abbr;
     }
+
+    getGMTAbbr(date) {
+        const offset = (this.convertDateToTimeZone(date) - date) / 60000;
+        if (!offset) {
+            return 'GMT';
+        }
+        const hours = Math.abs(Math.floor(offset / 60));
+        const minutes = Math.abs(mod(offset, 60));
+        const offsetString = minutes
+            ? "%n:%'02n".format(hours, minutes)
+            : '%n'.format(hours);
+        return 'GMT' + (offset < 0 ? '−' : '+') + offsetString;
+    }
+
     toJSON() {
         return this.id;
     }
 
     static fromJSON(id) {
-        return TimeZone[id] || null;
+        return getTimeZoneById(id);
     }
 
     static isEqual(a, b) {
@@ -216,36 +251,22 @@ class TimeZone {
         const alias = json.alias;
 
         for (const id in zones) {
-            addTimeZone(new TimeZone(id, zones[id]));
+            idToTZ.set(id, new TimeZone(id, zones[id]));
         }
         for (const id in link) {
-            addTimeZone(
-                new TimeZone(id, zones[link[id]] || TimeZone[link[id]].periods),
+            idToTZ.set(
+                id,
+                new TimeZone(
+                    id,
+                    zones[link[id]] || idToTZ.get(link[id]).periods,
+                ),
             );
         }
         for (const id in alias) {
-            TimeZone[id] = TimeZone[alias[id]];
+            idToTZ.set(id, idToTZ.get(alias[id]));
         }
-        Object.assign(TimeZone.rules, json.rules);
+        Object.assign(tzRules, json.rules);
     }
 }
 
-const addTimeZone = function (timeZone) {
-    let area = TimeZone.areas;
-    const parts = timeZone.name.split('/');
-    const l = parts.length - 1;
-    let i;
-    for (i = 0; i < l; i += 1) {
-        area = area[parts[i]] || (area[parts[i]] = {});
-    }
-    area[parts[l]] = timeZone;
-
-    TimeZone[timeZone.id] = timeZone;
-};
-
-TimeZone.rules = {
-    '-': [],
-};
-TimeZone.areas = {};
-
-export { TimeZone };
+export { TimeZone, getTimeZoneById };

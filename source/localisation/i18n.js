@@ -82,7 +82,7 @@ let activeLocaleCode = '';
     Returns:
         {O.i18n} Returns self.
 */
-const addLocale = function (locale) {
+const addLocale = (locale) => {
     locales[locale.code] = locale;
 };
 
@@ -100,7 +100,7 @@ const addLocale = function (locale) {
     Returns:
         {O.i18n} Returns self.
 */
-const setLocale = function (localeCode) {
+const setLocale = (localeCode) => {
     if (locales[localeCode]) {
         active = locales[localeCode];
         activeLocaleCode = localeCode;
@@ -125,9 +125,8 @@ const setLocale = function (localeCode) {
     Returns:
         {Locale|null} Returns the locale object (null if not present).
 */
-const getLocale = function (localeCode) {
-    return localeCode ? locales[localeCode] || null : active;
-};
+const getLocale = (localeCode) =>
+    localeCode ? locales[localeCode] || null : active;
 
 /**
     Function: O.i18n.get
@@ -140,9 +139,7 @@ const getLocale = function (localeCode) {
     Returns:
         {*} The value for that key.
 */
-const get = function (key) {
-    return active[key];
-};
+const get = (key) => active[key];
 
 /**
     Function: O.i18n.localise
@@ -158,13 +155,48 @@ const get = function (key) {
     Returns:
         {String} The localised string.
 */
-const localise = function (text, ...args) {
+const localise = (text, ...args) => {
     const translation = active.translations[text];
     if (translation === undefined) {
         return text;
     }
-    return translation.call(this, active, args);
+    return translation(active, args);
 };
+
+/**
+    Function: O.i18n.localiseList
+
+    Get a localised list of items. The default type is "conjunction", so you
+    get "A, B, and C". Change to "disjunction" to get "A, B, or C".
+
+    Parameters:
+        items - {String[]} The list of items.
+        type  - {String} (optional) "conjunction" or "disjunction".
+
+    Returns:
+        {String} The items joined together as a list per locale conventions.
+*/
+const localiseList = (items, type = 'conjunction') =>
+    typeof Intl !== 'undefined' && Intl.ListFormat
+        ? new Intl.ListFormat(activeLocaleCode, {
+              style: 'short',
+              type,
+          }).format(items)
+        : items.join(', ');
+
+/**
+    Function: O.i18n.regionName
+
+    Get the localised region (mostly country) name from the two-letter
+    ISO 3166 region code.
+
+    Parameters:
+        isoCode - {String} The region code to get the name for.
+
+    Returns:
+        {String} The localised region name.
+*/
+const localiseRegionName = (isoCode) => active.getRegionName(isoCode);
 
 /**
     Function: O.i18n.date
@@ -181,9 +213,8 @@ const localise = function (text, ...args) {
     Returns:
         {String} The localised date.
 */
-const localiseDate = function (date, type, utc) {
-    return active.getFormattedDate(date, type, utc);
-};
+const localiseDate = (date, type, utc) =>
+    active.getFormattedDate(date, type, utc);
 
 /**
     Function: O.i18n.number
@@ -198,9 +229,7 @@ const localiseDate = function (date, type, utc) {
     Returns:
         {String} The localised number.
 */
-const localiseNumber = function (n) {
-    return active.getFormattedNumber(n);
-};
+const localiseNumber = (n) => active.getFormattedNumber(n);
 
 /**
     Function: O.i18n.ordinal
@@ -214,9 +243,7 @@ const localiseNumber = function (n) {
     Returns:
         {String} The localised ordinal.
 */
-const ordinal = function (n) {
-    return active.getFormattedOrdinal(n);
-};
+const ordinal = (n) => active.getFormattedOrdinal(n);
 
 /**
     Function: O.i18n.fileSize
@@ -231,9 +258,8 @@ const ordinal = function (n) {
     Returns:
         {String} The localised, human-readable file size.
 */
-const fileSize = function (bytes, decimalPlaces) {
-    return active.getFormattedFileSize(bytes, decimalPlaces);
-};
+const fileSize = (bytes, decimalPlaces) =>
+    active.getFormattedFileSize(bytes, decimalPlaces);
 
 /**
     Function: O.i18n.compare
@@ -251,9 +277,7 @@ const fileSize = function (bytes, decimalPlaces) {
         `1`  => a is after b,
         `0`  => they are the same as far as this fn is concerned.
 */
-let compare = function (a, b) {
-    return a.toLowerCase().localeCompare(b.toLowerCase());
-};
+let compare = (a, b) => a.toLowerCase().localeCompare(b.toLowerCase());
 
 /**
     Function: O.i18n.makeSearchRegExp
@@ -266,24 +290,49 @@ let compare = function (a, b) {
     Basic glob syntax is supported, so the user can type "*" to match zero
     or more characters or "?" to match any single character.
 
+    Spaces are treated as dividing ORed tokens.
+
     Parameters:
         string - {String} The string to search for.
 
     Returns: {RegExp} A regular expression that will search for the string.
 */
-const makeSearchRegExp = function (string) {
-    return new RegExp(
-        '(?:^|\\W|_)' +
-            string
-                .escapeRegExp()
-                .replace(/\\\*/g, '.*')
-                .replace(/\\\?/g, '.')
-                .replace(
-                    /[A-Z]/gi,
-                    (letter) => alternatives[letter.toUpperCase()],
-                ),
-        'i',
+const makeSearchRegExp = (string) => {
+    let anchorToStart = true;
+    let source = string.replace(
+        /[-.*+?^${}()|[\]/\\ A-Z]/gi,
+        (char, index, _string) => {
+            switch (char) {
+                case '*': {
+                    if (!index) {
+                        anchorToStart = false;
+                        return '';
+                    }
+                    const next = _string.charAt(index + 1);
+                    if (!next) {
+                        return '';
+                    }
+                    return '[^' + next.escapeRegExp() + ']*';
+                }
+                case '?':
+                    return '.';
+                case ' ':
+                    return '|';
+                default:
+                    if (/[A-Z]/i.test(char)) {
+                        return alternatives[char.toUpperCase()];
+                    }
+                    return '\\' + char;
+            }
+        },
     );
+    if (anchorToStart) {
+        source = '(^|\\W|_)(' + source + ')';
+    } else {
+        // Ensure 2nd capture group is always the match.
+        source = '()(' + source + ')';
+    }
+    return new RegExp(source, 'i');
 };
 
 /**
@@ -303,6 +352,8 @@ export {
     get,
     localise,
     localise as loc,
+    localiseList as list,
+    localiseRegionName as regionName,
     localiseDate as date,
     localiseNumber as number,
     ordinal,

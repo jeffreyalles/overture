@@ -239,12 +239,11 @@ const updateIsEqual = function (u1, u2) {
 const windowIsStillInUse = function (index, windowSize, prefetch, ranges) {
     const start = index * windowSize;
     const margin = prefetch * windowSize;
-    let j = ranges.length;
-    while (j--) {
-        const range = ranges[j];
+    for (let i = ranges.length - 1; i >= 0; i -= 1) {
+        const range = ranges[i];
         const rangeStart = range.start || 0;
         if (!('end' in range)) {
-            break;
+            return true;
         }
         const rangeEnd = range.end;
         const rangeIntersectsWindow = intersect(
@@ -254,10 +253,10 @@ const windowIsStillInUse = function (index, windowSize, prefetch, ranges) {
             rangeEnd + margin,
         );
         if (rangeIntersectsWindow) {
-            break;
+            return true;
         }
     }
-    return j !== -1;
+    return false;
 };
 
 /**
@@ -352,17 +351,17 @@ const WindowedQuery = Class({
         This is *not* currently observable.
     */
     allIdsAreLoaded: function () {
-        let l = this.get('windowCount');
+        const windowCount = this.get('windowCount');
         const windows = this._windows;
-        if (l === null) {
+        if (windowCount === null) {
             return false;
         }
-        while (l--) {
-            if (!(windows[l] & WINDOW_READY)) {
-                break;
+        for (let i = windowCount - 1; i >= 0; i -= 1) {
+            if (!(windows[i] & WINDOW_READY)) {
+                return false;
             }
         }
-        return l < 0;
+        return true;
     }
         .property()
         .nocache(),
@@ -714,7 +713,7 @@ const WindowedQuery = Class({
             if (index) {
                 if (index !== listLength) {
                     recalculateFetchedWindows = true;
-                    list.length = index;
+                    list.length = listLength = index;
                     if (index < firstChange) {
                         firstChange = index;
                     }
@@ -726,8 +725,8 @@ const WindowedQuery = Class({
 
         // --- Remove items from list ---
 
-        for (let l = removedLength; l--; ) {
-            const index = removedIndexes[l];
+        for (let i = removedLength - 1; i >= 0; i -= 1) {
+            const index = removedIndexes[i];
             list.splice(index, 1);
             if (index < firstChange) {
                 firstChange = index;
@@ -742,7 +741,7 @@ const WindowedQuery = Class({
             while (list[i]) {
                 i += 1;
             }
-            list.length = i;
+            list.length = listLength = i;
             if (i < firstChange) {
                 firstChange = i;
             }
@@ -808,11 +807,10 @@ const WindowedQuery = Class({
     _applyWaitingPackets() {
         let didDropPackets = false;
         const waitingPackets = this._waitingPackets;
-        let l = waitingPackets.length;
         const queryState = this.get('queryState');
         let packet;
 
-        while (l--) {
+        for (let i = waitingPackets.length - 1; i >= 0; i -= 1) {
             packet = waitingPackets.shift();
             // If these values aren't now the same, the packet must
             // be OLDER than our current queryState, so just discard.
@@ -834,9 +832,8 @@ const WindowedQuery = Class({
         const length = this.get('length');
         const windowSize = this.get('windowSize');
         if (ranges) {
-            let l = ranges.length;
-            while (l--) {
-                const range = ranges[l].range;
+            for (let i = ranges.length - 1; i >= 0; i -= 1) {
+                const range = ranges[i].range;
                 let observerStart = range.start || 0;
                 let observerEnd = 'end' in range ? range.end : length;
                 if (observerStart < 0) {
@@ -1047,18 +1044,18 @@ const WindowedQuery = Class({
             // Now remove any idempotent operations
             const addedIndexes = normalisedUpdate.addedIndexes;
             const addedStoreKeys = normalisedUpdate.addedStoreKeys;
-            for (let l = addedIndexes.length; l--; ) {
-                const storeKey = addedStoreKeys[l];
-                const i = removedStoreKeys.indexOf(storeKey);
-                // i => Number of items removed before this one
-                // l => Number of items added before this one
-                // Therefore old index - i + l => new index. If it is being
+            for (let i = addedIndexes.length - 1; i >= 0; i -= 1) {
+                const storeKey = addedStoreKeys[i];
+                const j = removedStoreKeys.indexOf(storeKey);
+                // j => Number of items removed before this one
+                // i => Number of items added before this one
+                // Therefore old index - j + i => new index. If it is being
                 // added at this index, the whole operation is inert.
-                if (i > -1 && removedIndexes[i] - i + l === addedIndexes[l]) {
-                    removedIndexes.splice(i, 1);
-                    removedStoreKeys.splice(i, 1);
-                    addedIndexes.splice(l, 1);
-                    addedStoreKeys.splice(l, 1);
+                if (j > -1 && removedIndexes[j] - j + i === addedIndexes[i]) {
+                    removedIndexes.splice(j, 1);
+                    removedStoreKeys.splice(j, 1);
+                    addedIndexes.splice(i, 1);
+                    addedStoreKeys.splice(i, 1);
                 }
             }
 
@@ -1076,12 +1073,11 @@ const WindowedQuery = Class({
             if (!removedStoreKeys.length && !addedStoreKeys.length) {
                 wasSuccessfulPreemptive = true;
             } else {
-                let l = composed.length;
-                while (l--) {
-                    if (updateIsEqual(normalisedUpdate, composed[l])) {
+                for (let i = composed.length - 1; i >= 0; i -= 1) {
+                    if (updateIsEqual(normalisedUpdate, composed[i])) {
                         // Remove the preemptives that have now been
                         // confirmed by the server
-                        preemptives.splice(0, l + 1);
+                        preemptives.splice(0, i + 1);
                         wasSuccessfulPreemptive = true;
                         break;
                     }
@@ -1183,8 +1179,8 @@ const WindowedQuery = Class({
             const removedIndexes = allPreemptives.removedIndexes;
 
             if (canGetDeltaUpdates) {
-                for (let l = removedIndexes.length; l--; ) {
-                    const index = removedIndexes[l] - position;
+                for (let i = removedIndexes.length - 1; i >= 0; i -= 1) {
+                    const index = removedIndexes[i] - position;
                     if (index < length) {
                         if (index >= 0) {
                             storeKeys.splice(index, 1);
@@ -1364,10 +1360,23 @@ const WindowedQuery = Class({
         }
 
         if (refreshRequested || this.is(EMPTY)) {
-            this.set(
-                'status',
-                (this.get('status') | LOADING) & ~(OBSOLETE | DIRTY),
-            );
+            let status = this.get('status');
+            status |= LOADING;
+            status &= ~OBSOLETE;
+            // If we have applied pre-emptive updates since the last refresh,
+            // and the store still has changes for this type when this is
+            // fetched we must not clear the DIRTY flag, because the change
+            // that caused the pre-emptive update may still not be committed
+            // from the store to the source (if there was already a commit
+            // happening, it can get backed up by one round trip). We'll
+            // try again after this JMAP request has finished.
+            if (
+                status & DIRTY &&
+                !this.get('store').hasChangesForType(this.get('Type'))
+            ) {
+                status &= ~DIRTY;
+            }
+            this.set('status', status);
         }
 
         return {
@@ -1381,6 +1390,9 @@ const WindowedQuery = Class({
                         status & ~(WINDOW_LOADING | WINDOW_RECORDS_LOADING),
                 );
                 this.set('status', this.get('status') & ~LOADING);
+                if (this.is(DIRTY) && !this.is(OBSOLETE)) {
+                    this.setObsolete();
+                }
             },
         };
     },

@@ -15,7 +15,7 @@ export default function langImport(options) {
                 !filter(id) ||
                 !(id.endsWith('.lang.js') && id.includes('/strings/'))
             ) {
-                return;
+                return null;
             }
             id = id.slice(id.lastIndexOf('/') + 1).replace('.lang.js', '');
 
@@ -23,12 +23,12 @@ export default function langImport(options) {
         },
         renderChunk(code, chunk) {
             if (!filterChunk(chunk)) {
-                return;
+                return null;
             }
 
             const id = code.match(/['"]?code['"]?:\s*['"]([a-z-]+)['"]/)[1];
             if (!id) {
-                throw new Error("Could not find ID.")
+                throw new Error('Could not find ID.');
             }
             const fallbackRules = {
                 needsFallbackPluralisationFunction: true,
@@ -69,17 +69,16 @@ export default function langImport(options) {
                     } catch {
                         return match;
                     }
-                    const translations = options.idsInUse.map((id) => {
-                        const target = data[id];
-                        if (!target) {
-                            throw new Error(
-                                `Couldn't find a string for: ${id}`
-                            );
-                        }
-                        return compileTranslation(
-                            JSON.parse(target),
+                    const translations = [];
+                    const { idsInUse, idToIndex, isModern = true } = options;
+                    idsInUse.forEach((stringId) => {
+                        const index = idToIndex.get(stringId);
+                        const compiled = compileTranslation(
+                            JSON.parse(data[stringId]),
                             fallbackRules,
+                            isModern,
                         );
+                        translations[index] = compiled;
                     });
                     return 'translations: [' + translations + ']};';
                 },

@@ -21,7 +21,7 @@ import '../core/Array.js'; // For Array#erase
     called the value will be provided as the sole argument to the function; this
     will be undefined otherwise. Any changes made to public properties not using
     the set method must call the propertyDidChange method after the change to
-    keep the cache consistent and possibly notify observers in overriden
+    keep the cache consistent and possibly notify observers in overridden
     versions of this method.
 */
 
@@ -47,9 +47,8 @@ import '../core/Array.js'; // For Array#erase
 const computeDependentKeys = function (cache, key, results) {
     const dependents = cache[key];
     if (dependents) {
-        let l = dependents.length;
-        while (l--) {
-            const dependentKey = dependents[l];
+        for (let i = dependents.length - 1; i >= 0; i -= 1) {
+            const dependentKey = dependents[i];
             // May be multiple ways to get to this dependency.
             if (results.indexOf(dependentKey) === -1) {
                 results.push(dependentKey);
@@ -100,10 +99,9 @@ const ComputedProps = {
     */
     propertyDidChange(key /*, oldValue, newValue*/) {
         const dependents = this.propertiesDependentOnKey(key);
-        let l = dependents.length;
         const cache = meta(this).cache;
-        while (l--) {
-            delete cache[dependents[l]];
+        for (let i = dependents.length - 1; i >= 0; i -= 1) {
+            delete cache[dependents[i]];
         }
         return this;
     },
@@ -158,6 +156,7 @@ const ComputedProps = {
                 const cache = meta(this).cache;
                 oldValue = cache[key];
                 cache[key] = value;
+                silent = silent || oldValue === value;
             } else {
                 oldValue = undefined;
             }

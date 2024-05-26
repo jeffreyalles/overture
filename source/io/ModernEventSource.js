@@ -6,7 +6,7 @@ const readLineFromStream = async function* (reader, resetTimeout) {
     const utf8decoder = new TextDecoder('utf-8');
     let remainder = '';
     let hasSeenFirstByte = false;
-    for (;;) {
+    while (true) {
         const { value, done } = await reader.read();
         // There may be bytes we haven't seen in the decoder,
         // but doesn't matter; we can't do anything with them.
@@ -76,9 +76,13 @@ class ModernEventSource extends AbstractEventSource {
         } else {
             abortController.abort();
         }
-        this._abortController = null;
 
-        this._didFinishFetch(didNetworkError, status, response);
+        this._didFinishFetch(
+            abortController,
+            didNetworkError,
+            status,
+            response,
+        );
     }
 }
 

@@ -25,7 +25,7 @@ const SelectView = Class({
         The array of options to present in the select menu. Each item in the
         array should be an object, with the following properties:
 
-        text       - {String} The text to display for the item
+        label      - {String} The text to display for the item
         value      - {*} The value for the <O.SelectView#value> property to take
                      when this item is selected.
         isDisabled - {Boolean} (optional) If true, the option will be disabled
@@ -46,7 +46,7 @@ const SelectView = Class({
     baseClassName: 'v-Select',
 
     /**
-        Method (private): O.SelectView#_drawSelect
+        Method: O.SelectView#drawSelect
 
         Creates the DOM elements for the `<select>` and all `<option>` children.
 
@@ -56,7 +56,7 @@ const SelectView = Class({
         Returns:
             {Element} The `<select>`.
     */
-    drawControl() {
+    drawSelect() {
         const options = this.get('options');
         const selected = this.get('value');
         const select = (this._domControl = el(
@@ -68,7 +68,7 @@ const SelectView = Class({
             },
             options.map((option, i) =>
                 el('option', {
-                    text: option.text,
+                    text: option.label,
                     value: i,
                     selected: isEqual(option.value, selected),
                     disabled: !!option.isDisabled,
@@ -76,6 +76,10 @@ const SelectView = Class({
             ),
         ));
         return select;
+    },
+
+    drawControl() {
+        return this.drawSelect();
     },
 
     // --- Keep render in sync with state ---
@@ -122,11 +126,9 @@ const SelectView = Class({
     redrawValue() {
         const value = this.get('value');
         const options = this.get('options');
-        let l = options.length;
-
-        while (l--) {
-            if (isEqual(options[l].value, value)) {
-                this._domControl.value = l + '';
+        for (let i = options.length - 1; i >= 0; i -= 1) {
+            if (isEqual(options[i].value, value)) {
+                this._domControl.value = i + '';
                 break;
             }
         }

@@ -15,7 +15,9 @@ import { compare } from '../localisation/i18n.js';
     Parameters:
         properties - {String[]} The properties to sort the objects by, in
                      order of precedence. Can also supply just a String for one
-                     property.
+                     property. Prefixing `-` to a property reverses the sort
+                     order. Prefixing `!` to a property sorts null/undefined/
+                     empty string/false values last.
 
     Returns:
         {Function} This function may be passed to the Array#sort method to
@@ -27,19 +29,36 @@ const sortByProperties = function (properties) {
     }
     const l = properties.length;
 
-    return function (a, b) {
+    return (a, b) => {
         const hasGet = !!a.get;
         for (let i = 0; i < l; i += 1) {
             let prop = properties[i];
             let reverse = false;
+            let emptyIsFirst = true;
             if (prop.startsWith('-')) {
                 prop = prop.slice(1);
                 reverse = true;
             }
+            if (prop.startsWith('!')) {
+                prop = prop.slice(1);
+                emptyIsFirst = false;
+            }
 
             let aVal = hasGet ? a.get(prop) : a[prop];
             let bVal = hasGet ? b.get(prop) : b[prop];
-            const type = typeof aVal;
+            let type = typeof aVal;
+
+            // Must be the same type. Stringify if not.
+            if (type !== typeof bVal) {
+                aVal = aVal ? String(aVal) : '';
+                bVal = bVal ? String(bVal) : '';
+                type = 'string';
+            }
+
+            // If they're identical, try the next property
+            if (aVal === bVal) {
+                continue;
+            }
 
             if (reverse) {
                 const temp = aVal;
@@ -47,20 +66,22 @@ const sortByProperties = function (properties) {
                 bVal = temp;
             }
 
-            // Must be the same type
-            if (type === typeof bVal) {
-                if (type === 'boolean' && aVal !== bVal) {
-                    return aVal ? -1 : 1;
+            if (type !== 'number') {
+                if (!aVal) {
+                    return emptyIsFirst ? -1 : 1;
                 }
-                if (type === 'string' && aVal !== bVal) {
-                    return compare(aVal, bVal);
+                if (!bVal) {
+                    return emptyIsFirst ? 1 : -1;
                 }
-                if (aVal < bVal) {
-                    return -1;
-                }
-                if (aVal > bVal) {
-                    return 1;
-                }
+            }
+            if (type === 'string') {
+                return compare(aVal, bVal);
+            }
+            if (aVal < bVal) {
+                return -1;
+            }
+            if (aVal > bVal) {
+                return 1;
             }
         }
         return 0;

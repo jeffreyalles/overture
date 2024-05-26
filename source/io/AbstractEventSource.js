@@ -93,14 +93,10 @@ class AbstractEventSource {
     open() {
         if (this.readyState === CLOSED) {
             self.addEventListener('visibilitychange', this, false);
-            if (typeof navigator.connection !== 'undefined') {
-                navigator.connection.addEventListener(
-                    'typechange',
-                    this,
-                    false,
-                );
-            } else {
+            if ('ononline' in self) {
                 self.addEventListener('online', this, false);
+            } else if (typeof navigator.connection !== 'undefined') {
+                navigator.connection.addEventListener('change', this, false);
             }
             this._fetchStream();
         }
@@ -114,21 +110,16 @@ class AbstractEventSource {
             this.readyState = CLOSED;
             if (this._abortController) {
                 this._abortController.abort();
-                this._abortController = null;
             } else if (this._reconnectTimeout) {
                 clearTimeout(this._reconnectTimeout);
                 this._reconnectTimeout = null;
             }
             this._reconnectAfter = 0;
             self.removeEventListener('visibilitychange', this, false);
-            if (typeof navigator.connection !== 'undefined') {
-                navigator.connection.removeEventListener(
-                    'typechange',
-                    this,
-                    false,
-                );
-            } else {
+            if ('ononline' in self) {
                 self.removeEventListener('online', this, false);
+            } else if (typeof navigator.connection !== 'undefined') {
+                navigator.connection.removeEventListener('change', this, false);
             }
         }
         return this;
@@ -138,17 +129,24 @@ class AbstractEventSource {
 
     handleEvent(event) {
         const shouldRetryNetwork =
-            event.type === 'visibilitychange'
-                ? // We've awakened from sleep, the connection is probably dead.
-                  this._nextTimeout < Date.now()
-                : // We've changed networks, or come back online.
-                  navigator.onLine;
+            event.type !== 'visibilitychange' ||
+            // We've awakened from sleep, the connection is probably dead.
+            this._nextTimeout < Date.now();
         if (shouldRetryNetwork) {
+            const mayBeOnline = navigator.onLine;
             if (this.readyState === OPEN) {
-                // We've changed networks, our TCP connection may be dead;
-                // restart to be sure.
-                this._abortController.abort();
-            } else if (this._reconnectTimeout) {
+                // If we've changed networks, our TCP connection may be dead;
+                // restart to be sure. The "online" event fires whenever we
+                // change networks from testing, but it's not supported in
+                // workers in Chrome. The network.connection.change event fires
+                // when you change networks there, but also in a bunch of other
+                // cases. We drop the event source connection way too frequently
+                // if we abort every time this fires, so only do so when we go
+                // offline.
+                if (!mayBeOnline || event.type === 'online') {
+                    this._abortController.abort();
+                }
+            } else if (mayBeOnline && this._reconnectTimeout) {
                 // Waiting to reconnect; try immediately as we may have network.
                 clearTimeout(this._reconnectTimeout);
                 this._fetchStream();
@@ -256,12 +254,19 @@ class AbstractEventSource {
         return [options, resetTimeout];
     }
 
-    _didFinishFetch(didNetworkError, status, response) {
+    _didFinishFetch(abortController, didNetworkError, status, response) {
+        // Have we already started a new fetch? If you call close().open(),
+        // we can start fetching a new screen before the old one's finished;
+        // nothing to do in that case.
+        if (abortController !== this._abortController) {
+            return;
+        }
         // Temp errors, retry with exponential backoff:
         // * Network issue
         // * Rate limit response (429)
         // * Server error (>=500)
         clearTimeout(this._abortTimeout);
+        this._abortController = null;
         if (this.readyState === CLOSED) {
             // Nothing to do
         } else if (didNetworkError || status === 429 || status >= 500) {

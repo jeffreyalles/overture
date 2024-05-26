@@ -1,5 +1,5 @@
-import { bind } from 'overture/foundation';
-import { SingleSelectionController } from 'overture/selection';
+import { bind } from '/overture/foundation';
+import { SingleSelectionController } from '/overture/selection';
 
 import { state } from './state.js';
 
@@ -10,7 +10,7 @@ import { state } from './state.js';
    currently used in this example app) for keeping track of a multi-selection.
 */
 const selectedTodo = new SingleSelectionController({
-    content: bind( state, 'todos' )
+    content: bind(state, 'todos'),
 });
 
 export { selectedTodo };

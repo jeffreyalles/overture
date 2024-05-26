@@ -14,14 +14,17 @@ import { toPlatformKey } from './toPlatformKey.js';
 /* { on } from */
 import '../foundation/Decorators.js';
 
-const allowedInputs = {
-    checkbox: 1,
-    radio: 1,
-    file: 1,
-    submit: 1,
-};
+/**
+ A set of elements for which global keyboard shortcuts should still apply. Used
+ by GlobalKeyboardShortcuts#trigger.
+*/
+const allowedInputs = new Set(['checkbox', 'radio', 'file', 'submit']);
 
-const handleOnDown = {};
+/**
+ A set of shortcuts which should be applied on (and only on) the 'keydown'
+ event. Used by GlobalKeyboardShortcuts#trigger.
+*/
+const handleOnDown = new Set();
 
 /**
     Class: O.GlobalKeyboardShortcuts
@@ -29,6 +32,8 @@ const handleOnDown = {};
     Extends: O.Object
 
     This class facilitates adding keyboard shortcuts to your application.
+    Registers with ViewEventsController on initialisation — intended to generate
+    a singleton.
 */
 const GlobalKeyboardShortcuts = Class({
     Name: 'GlobalKeyboardShortcuts',
@@ -136,14 +141,13 @@ const GlobalKeyboardShortcuts = Class({
         key = toPlatformKey(key);
         const current = this._shortcuts[key];
         const length = current ? current.length : 0;
-        let l = length;
-        while (l--) {
-            const item = current[l];
+        for (let i = length - 1; i >= 0; i -= 1) {
+            const item = current[i];
             if (item[0] === object && item[1] === method) {
                 if (length === 1) {
                     delete this._shortcuts[key];
                 } else {
-                    current.splice(l, 1);
+                    current.splice(i, 1);
                 }
             }
         }
@@ -161,7 +165,8 @@ const GlobalKeyboardShortcuts = Class({
 
         Returns:
             {Array|null} Returns the [ object, method ] tuple to be triggered by
-            the event, or null if nothing is registered for this key press.
+            the event, or null if nothing is registered for this key press or if
+            isEnabled is false.
     */
     getHandlerForKey(key) {
         const shortcuts = this._shortcuts[key];
@@ -190,11 +195,11 @@ const GlobalKeyboardShortcuts = Class({
         const inputIsFocused =
             nodeName === 'TEXTAREA' ||
             nodeName === 'SELECT' ||
-            (nodeName === 'INPUT' && !allowedInputs[target.type]) ||
+            (nodeName === 'INPUT' && !allowedInputs.has(target.type)) ||
             event.targetView instanceof RichTextView;
         if (event.type === 'keydown') {
-            handleOnDown[key] = true;
-        } else if (handleOnDown[key]) {
+            handleOnDown.add(key);
+        } else if (handleOnDown.has(key)) {
             return;
         }
         const handler = this.getHandlerForKey(key);

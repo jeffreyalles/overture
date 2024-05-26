@@ -1,4 +1,4 @@
-/*global indexedDB, setTimeout */
+/*global indexedDB */
 
 class Database {
     // name: string
@@ -19,30 +19,27 @@ class Database {
         const _db = new Promise((resolve, reject) => {
             const name = this.name;
             const request = indexedDB.open(name, this.version);
-            let didTimeOut = false;
-            setTimeout(() => {
-                didTimeOut = true;
-                reject(new Error(`Timed out trying to open ${name}`));
-            }, 2000);
             request.onupgradeneeded = (event) => {
                 const db = request.result;
-                if (didTimeOut) {
-                    request.transaction.abort();
-                    db.close();
-                } else {
-                    this.setup(db, event.newVersion, event.oldVersion);
-                }
+                this.setup(
+                    db,
+                    event.newVersion,
+                    event.oldVersion,
+                    request.transaction,
+                );
             };
             request.onsuccess = () => {
                 const db = request.result;
-                if (didTimeOut) {
-                    db.close();
-                } else {
-                    db.onversionchange = () => this.needsUpdate();
-                    resolve(db);
-                }
+                this.objectStoreNames = db.objectStoreNames;
+                db.onversionchange = () => this.needsUpdate();
+                db.onclose = () => {
+                    if (this._db === _db) {
+                        this._db = null;
+                    }
+                };
+                resolve(db);
             };
-            request.onerror = () => reject(request.errorCode);
+            request.onerror = () => reject(request.error);
         });
         _db.catch(() => {
             if (this._db === _db) {
@@ -56,11 +53,22 @@ class Database {
     // Mode = readwrite or readonly
     async transaction(storeNames, mode, fn) {
         const db = await this.open();
-        return new Promise((resolve, reject) => {
+        // eslint-disable-next-line no-async-promise-executor
+        return new Promise(async (resolve, reject) => {
             const transaction = db.transaction(storeNames, mode);
-            transaction.onabort = () => reject(transaction.error);
-            transaction.oncomplete = () => resolve();
-            fn(transaction);
+            transaction.onabort = () => {
+                reject(transaction.error);
+            };
+            transaction.oncomplete = () => {
+                resolve();
+            };
+            try {
+                await fn(transaction);
+                transaction.commit();
+            } catch (error) {
+                reject(error);
+                transaction.abort();
+            }
         });
     }
 
@@ -77,7 +85,7 @@ class Database {
 const promisify = (request) =>
     new Promise((resolve, reject) => {
         request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.errorCode);
+        request.onerror = () => reject(request.error);
     });
 
 const iterate = async function* (cursor) {
